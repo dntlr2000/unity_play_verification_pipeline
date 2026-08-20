@@ -1,0 +1,7 @@
+# Runtime evidence is always external; ignore accidental local artifact roots.
+.artifacts/
+artifacts/
+
+# PowerShell and editor scratch files.
+*.tmp
+*.bak

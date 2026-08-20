@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dntlr2000/unity_agent_pipeline/main/schemas/unity-play-scenario-1.0.0.schema.json",
+  "title": "Unity Play Verification isolated scenario manifest",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "scenarioId",
+    "displayName",
+    "testFilter",
+    "timeoutSeconds",
+    "requiresGraphics",
+    "expectedScenes",
+    "expectedAssertionIds",
+    "screenshotIds"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "scenarioId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "testFilter": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+    "requiresGraphics": { "type": "boolean" },
+    "expectedScenes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^Assets/.+\\.unity$" }
+    },
+    "expectedAssertionIds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }
+    },
+    "screenshotIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }
+    }
+  }
+}

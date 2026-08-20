@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dntlr2000/unity_agent_pipeline/main/schemas/unity-play-compatibility-1.0.0.schema.json",
+  "title": "Unity Play Verification compatibility registry",
+  "type": "object",
+  "required": ["schemaVersion", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["unityVersion", "testFrameworkVersion", "status", "evidencePath"],
+        "additionalProperties": false,
+        "properties": {
+          "unityVersion": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+[abfp]\\d+$" },
+          "testFrameworkVersion": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+].+)?$" },
+          "status": { "enum": ["CANDIDATE", "APPROVED", "RETIRED"] },
+          "evidencePath": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

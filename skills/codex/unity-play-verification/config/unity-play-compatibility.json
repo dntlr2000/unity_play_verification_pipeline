@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.0.0",
+  "entries": [
+    {
+      "unityVersion": "2022.3.62f3",
+      "testFrameworkVersion": "1.1.33",
+      "status": "APPROVED",
+      "evidencePath": "docs/validation/unity-play-verification-real-unity-acceptance.md"
+    },
+    {
+      "unityVersion": "6000.0.69f1",
+      "testFrameworkVersion": "1.6.0",
+      "status": "APPROVED",
+      "evidencePath": "docs/validation/unity-play-verification-real-unity-acceptance.md"
+    },
+    {
+      "unityVersion": "6000.5.3f1",
+      "testFrameworkVersion": "1.7.0",
+      "status": "APPROVED",
+      "evidencePath": "docs/validation/unity-play-verification-real-unity-acceptance.md"
+    }
+  ]
+}

@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dntlr2000/unity_agent_pipeline/main/schemas/unity-play-verification-result-1.0.0.schema.json",
+  "title": "Unity Play Verification result",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "componentVersion",
+    "verifierVersion",
+    "projectRoot",
+    "doctor",
+    "compatibility",
+    "unity",
+    "selection",
+    "preflight",
+    "processControl",
+    "isolation",
+    "artifacts",
+    "nunit",
+    "editorLog",
+    "scenario",
+    "originalProjectIntegrity",
+    "gitMetadataIntegrity",
+    "verification",
+    "warnings",
+    "failures",
+    "blockers",
+    "finalStatus",
+    "evidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "componentVersion": { "type": "string", "minLength": 1 },
+    "verifierVersion": { "type": "string", "minLength": 1 },
+    "projectRoot": { "type": ["string", "null"] },
+    "doctor": { "type": "object" },
+    "compatibility": { "type": "object" },
+    "unity": { "type": "object" },
+    "selection": {
+      "type": "object",
+      "required": ["mode", "testFilter", "testCategory", "assemblyNames", "scenarioId"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["PROJECT_PLAYMODE_TESTS", "SCENARIO_OVERLAY"] },
+        "testFilter": { "type": ["string", "null"] },
+        "testCategory": { "type": ["string", "null"] },
+        "assemblyNames": { "type": ["string", "null"] },
+        "scenarioId": { "type": ["string", "null"] }
+      }
+    },
+    "preflight": { "type": "object" },
+    "processControl": { "type": "object" },
+    "isolation": { "type": "object" },
+    "artifacts": { "type": "object" },
+    "nunit": { "type": "object" },
+    "editorLog": { "type": "object" },
+    "scenario": { "type": "object" },
+    "originalProjectIntegrity": { "type": "object" },
+    "gitMetadataIntegrity": { "type": "object" },
+    "verification": {
+      "type": "object",
+      "required": [
+        "scriptCompilation",
+        "editorPlayMode",
+        "playModeTests",
+        "scenarioBehavior",
+        "visualEvidence",
+        "playerBuild"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scriptCompilation": { "$ref": "#/$defs/verificationScope" },
+        "editorPlayMode": { "$ref": "#/$defs/verificationScope" },
+        "playModeTests": { "$ref": "#/$defs/verificationScope" },
+        "scenarioBehavior": { "$ref": "#/$defs/verificationScope" },
+        "visualEvidence": { "$ref": "#/$defs/verificationScope" },
+        "playerBuild": { "$ref": "#/$defs/verificationScope" }
+      }
+    },
+    "warnings": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } },
+    "failures": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } },
+    "blockers": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } },
+    "finalStatus": {
+      "enum": ["PLAY_VERIFIED", "PLAY_FAILED", "VERIFICATION_BLOCKED", "ORIGINAL_PROJECT_CHANGED"]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sequence", "check", "status", "source", "detail"],
+        "additionalProperties": false,
+        "properties": {
+          "sequence": { "type": "integer", "minimum": 1 },
+          "check": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "minLength": 1 },
+          "source": { "type": ["string", "null"] },
+          "detail": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "verificationScope": {
+      "type": "object",
+      "required": ["status", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": ["NOT_VERIFIED", "VERIFIED_SUCCESS", "VERIFIED_FAILURE", "BLOCKED"]
+        },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": ["code", "check", "path", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "check": { "type": "string", "minLength": 1 },
+        "path": { "type": ["string", "null"] },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

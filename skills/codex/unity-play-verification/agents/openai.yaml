@@ -1,0 +1,7 @@
+interface:
+  display_name: "Unity Play Verification"
+  short_description: "Verify isolated Unity Editor PlayMode behavior"
+  default_prompt: "Use $unity-play-verification to run the current Unity project's approved Editor PlayMode tests or a validated isolated scenario bundle."
+
+policy:
+  allow_implicit_invocation: false

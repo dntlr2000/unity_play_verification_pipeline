@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1.0.0",
+  "scenarioId": "sample-editor-playmode",
+  "displayName": "Sample Editor PlayMode scenario",
+  "testFilter": "UnityPlayVerification.Sample.SampleScenarioTests.SampleScenario",
+  "timeoutSeconds": 120,
+  "requiresGraphics": true,
+  "expectedScenes": [],
+  "expectedAssertionIds": [
+    "editor-play-mode-active"
+  ],
+  "screenshotIds": [
+    "sample-frame"
+  ]
+}
