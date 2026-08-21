@@ -10,6 +10,7 @@ $script:RepositoryRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSSc
 $script:InstallerPath = Join-Path -Path $script:RepositoryRoot -ChildPath 'scripts\install-unity-play-verification-skill.ps1'
 $script:SkillSource = Join-Path -Path $script:RepositoryRoot -ChildPath 'skills\codex\unity-play-verification'
 $script:ScratchRoot = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('upv-installer-tests-' + [guid]::NewGuid().ToString('N'))
+$script:PowerShellHostPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
 $script:Assertions = 0
 
 # Throws when an installer test condition is false.
@@ -25,7 +26,7 @@ function Assert-UpvInstallerTrue {
     }
 }
 
-# Invokes the standalone installer in a child Windows PowerShell process.
+# Invokes the standalone installer in a child process of the PowerShell host under test.
 function Invoke-UpvInstallerTestProcess {
     param(
         [Parameter(Mandatory = $true)][string]$DestinationRoot,
@@ -36,7 +37,7 @@ function Invoke-UpvInstallerTestProcess {
     $ErrorActionPreference = 'Continue'
     try {
         $output = @(
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script:InstallerPath -DestinationRoot $DestinationRoot @AdditionalArguments 2>&1
+            & $script:PowerShellHostPath -NoProfile -ExecutionPolicy Bypass -File $script:InstallerPath -DestinationRoot $DestinationRoot @AdditionalArguments 2>&1
         )
         $exitCode = $LASTEXITCODE
     } finally {

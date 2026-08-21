@@ -1,6 +1,6 @@
 Set-StrictMode -Version Latest
 
-# Returns a named JSON object property without dynamic-member coercion.
+# Returns a named JSON property without collection enumeration or PowerShell 7 PSCustomObject coercion.
 function Get-JsonSchemaPropertyValue {
     param(
         [Parameter()]
@@ -16,8 +16,8 @@ function Get-JsonSchemaPropertyValue {
     }
     if ($Object -is [System.Collections.IDictionary]) {
         if ($Object.Contains($Name)) {
-            Write-Output -NoEnumerate $Object[$Name]
-            return
+            $dictionaryValue = $Object[$Name]
+            return ,$dictionaryValue
         }
         return $null
     }
@@ -26,7 +26,27 @@ function Get-JsonSchemaPropertyValue {
     if ($null -eq $property) {
         return $null
     }
-    Write-Output -NoEnumerate $property.Value
+    $propertyValue = $property.Value
+    return ,$propertyValue
+}
+
+# Converts one scalar or JSON array property into a stable object array on Windows PowerShell and PowerShell 7.
+function ConvertTo-JsonSchemaValueArray {
+    param(
+        [Parameter()]
+        [AllowNull()]
+        [object]$Value
+    )
+
+    $values = New-Object System.Collections.ArrayList
+    if ($Value -is [System.Array]) {
+        foreach ($item in $Value) {
+            [void]$values.Add($item)
+        }
+    } else {
+        [void]$values.Add($Value)
+    }
+    return ,([object[]]$values.ToArray())
 }
 
 # Tests whether a JSON object exposes one named property, including null-valued properties.
@@ -323,7 +343,7 @@ function Resolve-JsonSchemaReference {
     }
 }
 
-# Recursively validates every supported keyword at one schema node.
+# Recursively validates primitive, object, array, reference, and oneOf keywords at one schema node.
 function Invoke-JsonSchemaNodeValidation {
     param(
         [Parameter()]
@@ -363,8 +383,23 @@ function Invoke-JsonSchemaNodeValidation {
         Invoke-JsonSchemaNodeValidation -Value $Value -Schema $resolved.schema -CurrentDocument $resolved.document -SchemaRoot $SchemaRoot -DocumentCache $DocumentCache -Errors $Errors -Path $Path -Depth ($Depth + 1)
     }
 
+    if (Test-JsonSchemaProperty -Object $Schema -Name 'oneOf') {
+        $alternatives = ConvertTo-JsonSchemaValueArray -Value (Get-JsonSchemaPropertyValue -Object $Schema -Name 'oneOf')
+        $matchedAlternatives = 0
+        foreach ($alternative in $alternatives) {
+            $alternativeErrors = New-Object System.Collections.ArrayList
+            Invoke-JsonSchemaNodeValidation -Value $Value -Schema $alternative -CurrentDocument $CurrentDocument -SchemaRoot $SchemaRoot -DocumentCache $DocumentCache -Errors $alternativeErrors -Path $Path -Depth ($Depth + 1)
+            if ($alternativeErrors.Count -eq 0) {
+                $matchedAlternatives++
+            }
+        }
+        if ($matchedAlternatives -ne 1) {
+            Add-JsonSchemaError -Errors $Errors -Path $Path -Keyword 'oneOf' -Message "Expected exactly one matching schema alternative; matched $matchedAlternatives."
+        }
+    }
+
     if (Test-JsonSchemaProperty -Object $Schema -Name 'type') {
-        $typeNames = @((Get-JsonSchemaPropertyValue -Object $Schema -Name 'type'))
+        $typeNames = ConvertTo-JsonSchemaValueArray -Value (Get-JsonSchemaPropertyValue -Object $Schema -Name 'type')
         $matchesType = $false
         foreach ($typeName in $typeNames) {
             if (Test-JsonSchemaType -Value $Value -TypeName ([string]$typeName)) {
@@ -387,7 +422,8 @@ function Invoke-JsonSchemaNodeValidation {
 
     if (Test-JsonSchemaProperty -Object $Schema -Name 'enum') {
         $matchedEnum = $false
-        foreach ($candidate in @((Get-JsonSchemaPropertyValue -Object $Schema -Name 'enum'))) {
+        $enumValues = ConvertTo-JsonSchemaValueArray -Value (Get-JsonSchemaPropertyValue -Object $Schema -Name 'enum')
+        foreach ($candidate in $enumValues) {
             if (Test-JsonSchemaScalarEqual -Left $candidate -Right $Value) {
                 $matchedEnum = $true
                 break
@@ -436,7 +472,8 @@ function Invoke-JsonSchemaNodeValidation {
 
     if (Test-JsonSchemaObjectValue -Value $Value) {
         if (Test-JsonSchemaProperty -Object $Schema -Name 'required') {
-            foreach ($requiredName in @((Get-JsonSchemaPropertyValue -Object $Schema -Name 'required'))) {
+            $requiredNames = ConvertTo-JsonSchemaValueArray -Value (Get-JsonSchemaPropertyValue -Object $Schema -Name 'required')
+            foreach ($requiredName in $requiredNames) {
                 $requiredPath = Join-JsonSchemaPath -Path $Path -PropertyName ([string]$requiredName)
                 if (-not (Test-JsonSchemaProperty -Object $Value -Name ([string]$requiredName))) {
                     Add-JsonSchemaError -Errors $Errors -Path $requiredPath -Keyword 'required' -Message "Required property '$requiredName' is missing."

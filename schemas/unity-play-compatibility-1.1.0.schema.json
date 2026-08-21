@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dntlr2000/unity_play_verification_pipeline/main/schemas/unity-play-compatibility-1.1.0.schema.json",
+  "title": "Unity Play Verification compatibility and package identity registry",
+  "type": "object",
+  "required": ["schemaVersion", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.1.0" },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "unityVersion",
+          "testFrameworkVersion",
+          "allowedSourceKind",
+          "registryOrigin",
+          "packageTreeSha256",
+          "hashCanonicalization",
+          "status",
+          "evidencePath"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "unityVersion": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+[abfp]\\d+$" },
+          "testFrameworkVersion": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+].+)?$" },
+          "allowedSourceKind": { "const": "registry" },
+          "registryOrigin": { "const": "https://packages.unity.com" },
+          "packageTreeSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "hashCanonicalization": { "const": "upv-package-tree-relative-path-length-sha256-lf-v1" },
+          "status": { "enum": ["CANDIDATE", "APPROVED", "RETIRED"] },
+          "evidencePath": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

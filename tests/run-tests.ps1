@@ -10,15 +10,19 @@ $script:RepositoryRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSSc
 $script:SkillRoot = Join-Path -Path $script:RepositoryRoot -ChildPath 'skills\codex\unity-play-verification'
 $script:RunnerPath = Join-Path -Path $script:SkillRoot -ChildPath 'scripts\invoke-unity-play-verification.ps1'
 $script:CorePath = Join-Path -Path $script:SkillRoot -ChildPath 'scripts\lib\unity-play-verification-core.ps1'
+$script:IdentityPath = Join-Path -Path $script:SkillRoot -ChildPath 'scripts\lib\unity-test-framework-identity.ps1'
 $script:TemplatePath = Join-Path -Path $script:SkillRoot -ChildPath 'templates\minimal-scenario'
 $script:CompatibilityPath = Join-Path -Path $script:SkillRoot -ChildPath 'config\unity-play-compatibility.json'
 $script:ResultSchemaPath = Join-Path -Path $script:RepositoryRoot -ChildPath 'schemas\unity-play-verification-result-1.0.0.schema.json'
 $script:ScenarioSchemaPath = Join-Path -Path $script:RepositoryRoot -ChildPath 'schemas\unity-play-scenario-1.0.0.schema.json'
-$script:CompatibilitySchemaPath = Join-Path -Path $script:RepositoryRoot -ChildPath 'schemas\unity-play-compatibility-1.0.0.schema.json'
+$script:CompatibilitySchemaPath = Join-Path -Path $script:RepositoryRoot -ChildPath 'schemas\unity-play-compatibility-1.2.0.schema.json'
+$script:PreviousCompatibilitySchemaPath = Join-Path -Path $script:RepositoryRoot -ChildPath 'schemas\unity-play-compatibility-1.1.0.schema.json'
+$script:ImmutableCompatibilitySchemaPath = Join-Path -Path $script:RepositoryRoot -ChildPath 'schemas\unity-play-compatibility-1.0.0.schema.json'
 $script:VendorRoot = Join-Path -Path $script:SkillRoot -ChildPath 'scripts\vendor'
 $script:SchemaValidatorPath = Join-Path -Path $script:VendorRoot -ChildPath 'shared\json-schema-validator.ps1'
 $script:ProcessLibraryPath = Join-Path -Path $script:VendorRoot -ChildPath 'shared\unity-process-job.ps1'
 $script:FingerprintLibraryPath = Join-Path -Path $script:VendorRoot -ChildPath 'doctor\lib\unity-project-fingerprint.ps1'
+$script:GitIntegrityLibraryPath = Join-Path -Path $script:VendorRoot -ChildPath 'shared\git-metadata-integrity.ps1'
 $script:ProvenancePath = Join-Path -Path $script:RepositoryRoot -ChildPath 'modules\VENDORED_DEPENDENCIES.md'
 $script:VendoredRuntimePaths = @(
     (Join-Path -Path $script:VendorRoot -ChildPath 'doctor\inspect-unity-project.ps1'),
@@ -34,9 +38,11 @@ $script:ScratchRoot = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPa
 $script:Assertions = 0
 
 . $script:CorePath
+. $script:IdentityPath
 . $script:SchemaValidatorPath
 . $script:ProcessLibraryPath
 . $script:FingerprintLibraryPath
+. $script:GitIntegrityLibraryPath
 
 # Throws when a test condition is false.
 function Assert-True {
@@ -77,6 +83,68 @@ function Write-TestText {
         [void][System.IO.Directory]::CreateDirectory($parent)
     }
     [void][System.IO.File]::WriteAllText($Path, $Content, $script:Utf8NoBom)
+}
+
+# Creates one minimal project with controlled manifest, lock, and scoped-registry provenance evidence.
+function New-UpvProvenanceFixture {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$ManifestDependency,
+        [Parameter(Mandatory = $true)][string]$LockSource,
+        [Parameter()][AllowNull()][string]$LockUrl,
+        [Parameter()][string]$LockVersion = '1.1.33',
+        [Parameter()][AllowNull()][string]$InterceptingScope
+    )
+
+    $root = Join-Path $script:ScratchRoot ('provenance-' + $Name)
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $root 'Packages'))
+    $manifest = [ordered]@{
+        dependencies = [ordered]@{
+            'com.unity.test-framework' = $ManifestDependency
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($InterceptingScope)) {
+        $manifest.scopedRegistries = @([ordered]@{
+            name = 'untrusted-interceptor'
+            url = 'https://packages.example.invalid'
+            scopes = @($InterceptingScope)
+        })
+    }
+    $lockEntry = [ordered]@{
+        version = $LockVersion
+        depth = 0
+        source = $LockSource
+        dependencies = [ordered]@{}
+    }
+    if (-not [string]::IsNullOrWhiteSpace($LockUrl)) {
+        $lockEntry.url = $LockUrl
+    }
+    $lock = [ordered]@{
+        dependencies = [ordered]@{
+            'com.unity.test-framework' = $lockEntry
+        }
+    }
+    Write-TestText -Path (Join-Path $root 'Packages\manifest.json') -Content (ConvertTo-Json -Depth 10 -InputObject $manifest)
+    Write-TestText -Path (Join-Path $root 'Packages\packages-lock.json') -Content (ConvertTo-Json -Depth 10 -InputObject $lock)
+    return $root
+}
+
+# Adds one deterministic resolved Test Framework package tree to a controlled project fixture.
+function Add-UpvResolvedPackageFixture {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProjectRoot,
+        [Parameter(Mandatory = $true)][string]$DirectoryName,
+        [Parameter()][string]$PackageVersion = '1.1.33',
+        [Parameter()][string]$Payload = 'approved package payload'
+    )
+
+    $packageRoot = Join-Path $ProjectRoot ('Library\PackageCache\' + $DirectoryName)
+    Write-TestText -Path (Join-Path $packageRoot 'package.json') -Content (ConvertTo-Json -Depth 5 -InputObject ([ordered]@{
+        name = 'com.unity.test-framework'
+        version = $PackageVersion
+    }))
+    Write-TestText -Path (Join-Path $packageRoot 'Runtime\payload.txt') -Content $Payload
+    return $packageRoot
 }
 
 # Compiles an unsigned Unity-shaped executable for internal process and production trust-boundary tests.
@@ -136,7 +204,21 @@ internal static class Program
     }
 }
 "@
-    Add-Type -TypeDefinition $source -Language CSharp -OutputAssembly $OutputPath -OutputType ConsoleApplication
+    $windowsRoot = [Environment]::GetEnvironmentVariable('WINDIR', 'Process')
+    $compilerCandidates = @(
+        (Join-Path $windowsRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'),
+        (Join-Path $windowsRoot 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
+    )
+    $compilerPath = @($compilerCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1)
+    if ($compilerPath.Count -ne 1) {
+        throw 'A .NET Framework C# compiler is required for the internal unsigned fake fixture.'
+    }
+    $sourcePath = [System.IO.Path]::ChangeExtension($OutputPath, '.cs')
+    Write-TestText -Path $sourcePath -Content $source
+    $compilerOutput = @(& $compilerPath[0] /nologo /target:exe "/out:$OutputPath" $sourcePath 2>&1)
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
+        throw 'Unsigned fake Unity compilation failed: ' + [string]::Join([Environment]::NewLine, [string[]]$compilerOutput)
+    }
     return [System.IO.Path]::GetFullPath($OutputPath)
 }
 
@@ -201,13 +283,17 @@ try {
     foreach ($requiredPath in @(
         $script:RunnerPath,
         $script:CorePath,
+        $script:IdentityPath,
         $script:TemplatePath,
         $script:CompatibilityPath,
         $script:ResultSchemaPath,
         $script:ScenarioSchemaPath,
         $script:CompatibilitySchemaPath,
+        $script:PreviousCompatibilitySchemaPath,
+        $script:ImmutableCompatibilitySchemaPath,
         $script:ProcessLibraryPath,
         $script:FingerprintLibraryPath,
+        $script:GitIntegrityLibraryPath,
         (Join-Path $script:RepositoryRoot '.github\workflows\static-tests.yml'),
         (Join-Path $script:RepositoryRoot 'scripts\install-unity-play-verification-skill.ps1'),
         (Join-Path $script:RepositoryRoot 'modules\VENDORED_DEPENDENCIES.md'),
@@ -230,16 +316,21 @@ try {
 
     $acceptancePath = Join-Path $script:RepositoryRoot 'docs\validation\unity-play-verification-real-unity-acceptance.md'
     $acceptanceContent = Get-Content -Raw -LiteralPath $acceptancePath
-    Assert-True -Condition ($acceptanceContent -match 'APPROVED.+SELECTED EDITOR PLAYMODE TESTS AND SOURCE-ONLY SCENARIOS ONLY') -Message 'Acceptance scope is explicitly limited'
-    Assert-True -Condition ($acceptanceContent -match '18 cases total') -Message 'Acceptance document records all 18 real-Unity cases'
+    Assert-True -Condition ($acceptanceContent -match 'SELECTED EDITOR PLAYMODE TESTS AND SOURCE-ONLY SCENARIOS ONLY') -Message 'Acceptance scope is explicitly limited'
+    Assert-True -Condition ($acceptanceContent -match '18-case matrix') -Message 'Acceptance document records the full requested real-Unity matrix outcome'
+    Assert-True -Condition ($acceptanceContent -match '21 results total') -Message 'Acceptance document records three supplemental compilation-failure cases'
+    Assert-True -Condition ($acceptanceContent -match 'Editor-builtin') -Message 'Acceptance document distinguishes Unity 6 builtin provenance from registry provenance'
+    Assert-True -Condition ($acceptanceContent -match '(?i)not a security sandbox') -Message 'Acceptance document states the same-user-code threat boundary'
     Assert-True -Condition ($acceptanceContent -notmatch '(?i)C:\\Users|E:\\Unity|Woosik|accessToken') -Message 'Acceptance document excludes local identity, project paths, and access tokens'
     foreach ($acceptedFile in @(
         $script:RunnerPath,
         $script:CorePath,
+        $script:IdentityPath,
         (Join-Path $script:SkillRoot 'harness\PlayVerificationHarness.cs'),
         $script:ResultSchemaPath,
         $script:ScenarioSchemaPath,
         $script:CompatibilitySchemaPath,
+        $script:PreviousCompatibilitySchemaPath,
         $script:CompatibilityPath
     )) {
         $currentHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $acceptedFile).Hash.ToLowerInvariant()
@@ -251,7 +342,7 @@ try {
     Assert-True -Condition ($v05ReleaseContent -match 'Release contract status:\s*\*\*FINAL\*\*') -Message 'v0.5.0 release contract is final'
     Assert-True -Condition ($v06ReleaseContent -match 'Release contract status:\s*\*\*FINAL\*\*') -Message 'v0.6.0 release contract is final'
 
-    foreach ($jsonPath in @($script:ResultSchemaPath, $script:ScenarioSchemaPath, $script:CompatibilitySchemaPath, $script:CompatibilityPath)) {
+    foreach ($jsonPath in @($script:ResultSchemaPath, $script:ScenarioSchemaPath, $script:CompatibilitySchemaPath, $script:PreviousCompatibilitySchemaPath, $script:ImmutableCompatibilitySchemaPath, $script:CompatibilityPath)) {
         $parsed = Get-Content -Raw -LiteralPath $jsonPath | ConvertFrom-Json -ErrorAction Stop
         Assert-True -Condition ($null -ne $parsed) -Message "JSON parses: $jsonPath"
     }
@@ -259,8 +350,221 @@ try {
     $compatibilityRegistry = Get-Content -Raw -LiteralPath $script:CompatibilityPath | ConvertFrom-Json
     Assert-SchemaValid -Instance $scenarioManifest -SchemaPath $script:ScenarioSchemaPath -Message 'Scenario template validates against schema'
     Assert-SchemaValid -Instance $compatibilityRegistry -SchemaPath $script:CompatibilitySchemaPath -Message 'Compatibility registry validates against schema'
-    Assert-Equal -Expected 3 -Actual @($compatibilityRegistry.entries).Count -Message 'Initial compatibility registry contains three exact pairs'
-    Assert-Equal -Expected 3 -Actual @($compatibilityRegistry.entries | Where-Object { $_.status -ceq 'APPROVED' }).Count -Message 'All three real-Unity acceptance pairs are approved'
+    Assert-Equal -Expected '1.2.0' -Actual $compatibilityRegistry.schemaVersion -Message 'Compatibility registry uses the Editor-bound source-specific schema'
+    Assert-Equal -Expected 3 -Actual @($compatibilityRegistry.entries).Count -Message 'All three evidence-complete Unity pairs are registered'
+    Assert-Equal -Expected 3 -Actual @($compatibilityRegistry.entries | Where-Object { $_.status -ceq 'APPROVED' }).Count -Message 'All evidence-complete registry and builtin pairs are approved'
+    Assert-Equal -Expected 1 -Actual @($compatibilityRegistry.entries | Where-Object { $_.allowedSourceKind -ceq 'registry' }).Count -Message 'Exactly one pair uses official registry provenance'
+    Assert-Equal -Expected 2 -Actual @($compatibilityRegistry.entries | Where-Object { $_.allowedSourceKind -ceq 'builtin' }).Count -Message 'Exactly two Unity 6 pairs use Editor-builtin provenance'
+    Assert-Equal -Expected '18b9576da338b999a61157c9235f4ef3a91360cc877dbf49281a13f37e7da36b' -Actual $compatibilityRegistry.entries[0].packageTreeSha256 -Message 'Approved Test Framework identity is evidence-derived'
+    foreach ($entry in @($compatibilityRegistry.entries)) {
+        Assert-True -Condition ([string]$entry.unityExecutableSha256 -match '^[0-9a-f]{64}$') -Message "Approved Unity executable identity is pinned: $($entry.unityVersion)"
+    }
+    $builtinCompatibility = Get-UpvCompatibilityAssessment `
+        -RegistryPath $script:CompatibilityPath `
+        -UnityVersion '6000.0.69f1' `
+        -TestFrameworkVersion '1.6.0'
+    Assert-True -Condition $builtinCompatibility.approved -Message 'Unity 6000.0 builtin compatibility entry is approved'
+    Assert-Equal -Expected 'builtin' -Actual $builtinCompatibility.allowedSourceKind -Message 'Unity 6000.0 compatibility source is Editor-builtin'
+    Assert-True -Condition ($null -eq $builtinCompatibility.registryOrigin) -Message 'Builtin compatibility entry has no registry origin'
+    Assert-Equal -Expected '3927c20e4c76f15951989fd4866546b03d3ebfcc72bb5d708cd6397fad50451d' -Actual $builtinCompatibility.unityExecutableSha256 -Message 'Builtin compatibility entry pins the accepted Editor binary'
+
+    $invalidBuiltinOrigin = Get-Content -Raw -LiteralPath $script:CompatibilityPath | ConvertFrom-Json
+    $invalidBuiltinOrigin.entries[1].registryOrigin = 'https://packages.unity.com'
+    Assert-True -Condition (@(Invoke-JsonSchemaValidation -Instance $invalidBuiltinOrigin -SchemaPath $script:CompatibilitySchemaPath).Count -gt 0) -Message 'Schema oneOf rejects builtin entries with a registry origin'
+    $invalidRegistryOrigin = Get-Content -Raw -LiteralPath $script:CompatibilityPath | ConvertFrom-Json
+    $invalidRegistryOrigin.entries[0].registryOrigin = $null
+    Assert-True -Condition (@(Invoke-JsonSchemaValidation -Instance $invalidRegistryOrigin -SchemaPath $script:CompatibilitySchemaPath).Count -gt 0) -Message 'Schema oneOf rejects registry entries without the official origin'
+
+    $officialProvenanceRoot = New-UpvProvenanceFixture `
+        -Name 'official' `
+        -ManifestDependency '1.1.33' `
+        -LockSource 'registry' `
+        -LockUrl 'https://packages.unity.com'
+    $officialProvenance = Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $officialProvenanceRoot
+    Assert-True -Condition $officialProvenance.accepted -Message ('Official registry provenance is accepted: ' + [string]::Join(' ', [string[]]$officialProvenance.errors))
+    Assert-Equal -Expected 'https://packages.unity.com' -Actual $officialProvenance.registryOrigin -Message 'Official registry origin is canonicalized'
+    Assert-True -Condition $officialProvenance.sourcePolicyMatched -Message 'Official registry source policy match is explicit'
+
+    $builtinProvenanceRoot = New-UpvProvenanceFixture `
+        -Name 'builtin' `
+        -ManifestDependency '1.6.0' `
+        -LockVersion '1.6.0' `
+        -LockSource 'builtin'
+    $builtinProvenance = Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $builtinProvenanceRoot -AllowedSourceKinds @('builtin')
+    Assert-True -Condition $builtinProvenance.accepted -Message ('Editor-builtin provenance is accepted only by its explicit policy: ' + [string]::Join(' ', [string[]]$builtinProvenance.errors))
+    Assert-Equal -Expected 'builtin' -Actual $builtinProvenance.packagesLockSource -Message 'Builtin source remains explicit in evidence'
+    Assert-True -Condition ($null -eq $builtinProvenance.registryOrigin) -Message 'Builtin source carries no registry origin'
+    Assert-True -Condition $builtinProvenance.sourcePolicyMatched -Message 'Builtin source policy match is explicit'
+    $builtinUnderRegistryPolicy = Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $builtinProvenanceRoot -AllowedSourceKinds @('registry')
+    Assert-True -Condition (-not $builtinUnderRegistryPolicy.accepted) -Message 'Builtin source cannot satisfy a registry-only compatibility entry'
+    $registryUnderBuiltinPolicy = Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $officialProvenanceRoot -AllowedSourceKinds @('builtin')
+    Assert-True -Condition (-not $registryUnderBuiltinPolicy.accepted) -Message 'Registry source cannot satisfy an Editor-builtin compatibility entry'
+
+    $builtinWithUrlRoot = New-UpvProvenanceFixture `
+        -Name 'builtin-with-url' `
+        -ManifestDependency '1.6.0' `
+        -LockVersion '1.6.0' `
+        -LockSource 'builtin' `
+        -LockUrl 'https://packages.unity.com'
+    Assert-True -Condition (-not (Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $builtinWithUrlRoot -AllowedSourceKinds @('builtin')).accepted) -Message 'Builtin provenance that claims a registry URL is rejected as ambiguous'
+
+    $builtinScopedRoot = New-UpvProvenanceFixture `
+        -Name 'builtin-scoped-registry' `
+        -ManifestDependency '1.6.0' `
+        -LockVersion '1.6.0' `
+        -LockSource 'builtin' `
+        -InterceptingScope 'com.unity'
+    Assert-True -Condition (-not (Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $builtinScopedRoot -AllowedSourceKinds @('builtin')).accepted) -Message 'Builtin evidence does not bypass a scoped registry interceptor'
+
+    $fileProvenanceRoot = New-UpvProvenanceFixture `
+        -Name 'file' `
+        -ManifestDependency 'file:../UntrustedTestFramework' `
+        -LockSource 'local'
+    $fileProvenance = Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $fileProvenanceRoot
+    Assert-True -Condition (-not $fileProvenance.accepted) -Message 'file: Test Framework with an approved package.json version is rejected before Unity'
+
+    $embeddedProvenanceRoot = New-UpvProvenanceFixture `
+        -Name 'embedded' `
+        -ManifestDependency '1.1.33' `
+        -LockSource 'embedded'
+    $embeddedProvenance = Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $embeddedProvenanceRoot
+    Assert-True -Condition (-not $embeddedProvenance.accepted) -Message 'Embedded Test Framework is rejected'
+    Assert-Equal -Expected 'embedded' -Actual $embeddedProvenance.packagesLockSource -Message 'Rejected embedded source remains visible in evidence'
+
+    $gitProvenanceRoot = New-UpvProvenanceFixture `
+        -Name 'git' `
+        -ManifestDependency 'https://example.invalid/test-framework.git#v1.1.33' `
+        -LockSource 'git'
+    Assert-True -Condition (-not (Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $gitProvenanceRoot).accepted) -Message 'Git Test Framework is rejected'
+
+    $tarballProvenanceRoot = New-UpvProvenanceFixture `
+        -Name 'tarball' `
+        -ManifestDependency 'https://example.invalid/com.unity.test-framework-1.1.33.tgz' `
+        -LockSource 'local-tarball'
+    Assert-True -Condition (-not (Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $tarballProvenanceRoot).accepted) -Message 'Tarball Test Framework is rejected'
+
+    $scopedProvenanceRoot = New-UpvProvenanceFixture `
+        -Name 'scoped-registry' `
+        -ManifestDependency '1.1.33' `
+        -LockSource 'registry' `
+        -LockUrl 'https://packages.unity.com' `
+        -InterceptingScope 'com.unity'
+    $scopedProvenance = Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $scopedProvenanceRoot
+    Assert-True -Condition (-not $scopedProvenance.accepted) -Message 'Custom scoped registry that can claim com.unity.test-framework is rejected'
+    Assert-Equal -Expected 1 -Actual @($scopedProvenance.scopedRegistryInterceptors).Count -Message 'Scoped-registry interceptor evidence is recorded'
+
+    $approvedResolvedRoot = Add-UpvResolvedPackageFixture `
+        -ProjectRoot $officialProvenanceRoot `
+        -DirectoryName 'com.unity.test-framework@approved'
+    $approvedSnapshot = Get-UpvPackageTreeSnapshot -PackageRoot $approvedResolvedRoot
+    $approvedIdentity = Get-UpvResolvedTestFrameworkIdentityAssessment `
+        -ProjectRoot $officialProvenanceRoot `
+        -Provenance $officialProvenance `
+        -ExpectedVersion '1.1.33' `
+        -ExpectedSourceKind 'registry' `
+        -ExpectedRegistryOrigin 'https://packages.unity.com' `
+        -ExpectedTreeSha256 $approvedSnapshot.treeSha256 `
+        -ExpectedCanonicalization $approvedSnapshot.canonicalization
+    Assert-True -Condition $approvedIdentity.accepted -Message ('Official source and exact content hash are accepted: ' + [string]::Join(' ', [string[]]$approvedIdentity.errors))
+    Assert-True -Condition $approvedIdentity.identityMatched -Message 'Exact resolved package identity is positively matched'
+    Assert-Equal -Expected 2 -Actual $approvedIdentity.fileCount -Message 'Resolved package identity records every fixture file'
+    Assert-True -Condition ($approvedIdentity.snapshotAttempts -ge 2) -Message 'Resolved package identity requires two consecutive stable snapshots'
+
+    $builtinResolvedRoot = Add-UpvResolvedPackageFixture `
+        -ProjectRoot $builtinProvenanceRoot `
+        -DirectoryName 'com.unity.test-framework@builtin' `
+        -PackageVersion '1.6.0' `
+        -Payload 'approved builtin package payload'
+    $builtinSnapshot = Get-UpvPackageTreeSnapshot -PackageRoot $builtinResolvedRoot
+    $builtinIdentity = Get-UpvResolvedTestFrameworkIdentityAssessment `
+        -ProjectRoot $builtinProvenanceRoot `
+        -Provenance $builtinProvenance `
+        -ExpectedVersion '1.6.0' `
+        -ExpectedSourceKind 'builtin' `
+        -ExpectedRegistryOrigin $null `
+        -ExpectedTreeSha256 $builtinSnapshot.treeSha256 `
+        -ExpectedCanonicalization $builtinSnapshot.canonicalization
+    Assert-True -Condition $builtinIdentity.accepted -Message ('Editor-builtin source and exact content hash are accepted: ' + [string]::Join(' ', [string[]]$builtinIdentity.errors))
+    Assert-True -Condition $builtinIdentity.identityMatched -Message 'Builtin resolved package identity is positively matched'
+    Assert-Equal -Expected 'builtin' -Actual $builtinIdentity.expectedSourceKind -Message 'Builtin identity records its expected source kind'
+
+    $mismatchedIdentity = Get-UpvResolvedTestFrameworkIdentityAssessment `
+        -ProjectRoot $officialProvenanceRoot `
+        -Provenance $officialProvenance `
+        -ExpectedVersion '1.1.33' `
+        -ExpectedSourceKind 'registry' `
+        -ExpectedRegistryOrigin 'https://packages.unity.com' `
+        -ExpectedTreeSha256 '0000000000000000000000000000000000000000000000000000000000000000' `
+        -ExpectedCanonicalization $approvedSnapshot.canonicalization
+    Assert-True -Condition (-not $mismatchedIdentity.accepted) -Message 'Approved version with different package content hash is rejected'
+    Assert-True -Condition (-not $mismatchedIdentity.identityMatched) -Message 'Content mismatch is explicit in identity evidence'
+
+    $missingIdentityRoot = New-UpvProvenanceFixture `
+        -Name 'identity-missing' `
+        -ManifestDependency '1.1.33' `
+        -LockSource 'registry' `
+        -LockUrl 'https://packages.unity.com'
+    $missingIdentityProvenance = Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $missingIdentityRoot
+    $missingIdentity = Get-UpvResolvedTestFrameworkIdentityAssessment `
+        -ProjectRoot $missingIdentityRoot `
+        -Provenance $missingIdentityProvenance `
+        -ExpectedVersion '1.1.33' `
+        -ExpectedSourceKind 'registry' `
+        -ExpectedRegistryOrigin 'https://packages.unity.com' `
+        -ExpectedTreeSha256 $approvedSnapshot.treeSha256 `
+        -ExpectedCanonicalization $approvedSnapshot.canonicalization
+    Assert-True -Condition (-not $missingIdentity.accepted) -Message 'Missing resolved Test Framework package is rejected'
+
+    $duplicateIdentityRoot = New-UpvProvenanceFixture `
+        -Name 'identity-duplicate' `
+        -ManifestDependency '1.1.33' `
+        -LockSource 'registry' `
+        -LockUrl 'https://packages.unity.com'
+    [void](Add-UpvResolvedPackageFixture -ProjectRoot $duplicateIdentityRoot -DirectoryName 'com.unity.test-framework@one' -Payload 'one')
+    [void](Add-UpvResolvedPackageFixture -ProjectRoot $duplicateIdentityRoot -DirectoryName 'com.unity.test-framework@two' -Payload 'two')
+    $duplicateIdentity = Get-UpvResolvedTestFrameworkIdentityAssessment `
+        -ProjectRoot $duplicateIdentityRoot `
+        -Provenance (Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $duplicateIdentityRoot) `
+        -ExpectedVersion '1.1.33' `
+        -ExpectedSourceKind 'registry' `
+        -ExpectedRegistryOrigin 'https://packages.unity.com' `
+        -ExpectedTreeSha256 $approvedSnapshot.treeSha256 `
+        -ExpectedCanonicalization $approvedSnapshot.canonicalization
+    Assert-True -Condition (-not $duplicateIdentity.accepted) -Message 'Duplicate resolved Test Framework packages are rejected'
+    Assert-Equal -Expected 2 -Actual $duplicateIdentity.candidateCount -Message 'Duplicate candidate count is recorded'
+
+    $wrongVersionIdentityRoot = New-UpvProvenanceFixture `
+        -Name 'identity-version' `
+        -ManifestDependency '1.1.33' `
+        -LockSource 'registry' `
+        -LockUrl 'https://packages.unity.com'
+    [void](Add-UpvResolvedPackageFixture -ProjectRoot $wrongVersionIdentityRoot -DirectoryName 'com.unity.test-framework@wrong' -PackageVersion '1.1.32')
+    $wrongVersionIdentity = Get-UpvResolvedTestFrameworkIdentityAssessment `
+        -ProjectRoot $wrongVersionIdentityRoot `
+        -Provenance (Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $wrongVersionIdentityRoot) `
+        -ExpectedVersion '1.1.33' `
+        -ExpectedSourceKind 'registry' `
+        -ExpectedRegistryOrigin 'https://packages.unity.com' `
+        -ExpectedTreeSha256 $approvedSnapshot.treeSha256 `
+        -ExpectedCanonicalization $approvedSnapshot.canonicalization
+    Assert-True -Condition (-not $wrongVersionIdentity.accepted) -Message 'Resolved package.json version mismatch is rejected'
+
+    $blockedPromotion = Get-UpvFinalStatusAssessment `
+        -OriginalIntegrityStatus 'UNCHANGED' `
+        -GitIntegrityStatus 'UNCHANGED' `
+        -BlockerCount 1 `
+        -FailureCount 0 `
+        -CompatibilityStatus 'BLOCKED' `
+        -RequiredScopeStatuses @('VERIFIED_SUCCESS', 'VERIFIED_SUCCESS', 'VERIFIED_SUCCESS')
+    Assert-Equal -Expected 'VERIFICATION_BLOCKED' -Actual $blockedPromotion -Message 'Successful test evidence cannot promote a package identity blocker'
+    $integrityPrecedence = Get-UpvFinalStatusAssessment `
+        -OriginalIntegrityStatus 'UNCHANGED' `
+        -GitIntegrityStatus 'CHANGED' `
+        -BlockerCount 1 `
+        -FailureCount 1 `
+        -CompatibilityStatus 'BLOCKED' `
+        -RequiredScopeStatuses @('VERIFIED_FAILURE')
+    Assert-Equal -Expected 'ORIGINAL_PROJECT_CHANGED' -Actual $integrityPrecedence -Message 'Git metadata change retains highest final-status precedence'
 
     $safeSelector = Test-UpvSelectorValue -Value 'Smoke;Gameplay.*' -Name 'TestFilter'
     $unsafeSelector = Test-UpvSelectorValue -Value "Smoke`nOther" -Name 'TestFilter'
@@ -342,6 +646,16 @@ try {
     Assert-Equal -Expected 'FAILURE' -Actual $failureLogAnalysis.classification -Message 'Compiler error is a concrete log failure'
     Assert-Equal -Expected 'NOT_ANALYZED' -Actual (Get-UpvEditorLogAnalysis -Path (Join-Path $logRoot 'missing.log') -ExpectedUnityVersion '6000.0.69f1' -ExpectedProjectPath $isolatedPath).classification -Message 'Missing Editor.log is not promoted'
 
+    $passedNUnitAnalysis = Get-UpvNUnitAnalysis -Path (Join-Path $nunitRoot 'passed.xml')
+    $malformedNUnitAnalysis = Get-UpvNUnitAnalysis -Path (Join-Path $nunitRoot 'malformed.xml')
+    $conflictingScopes = Get-UpvBaseVerificationScopeAssessment -EditorLog $failureLogAnalysis -NUnit $passedNUnitAnalysis -ExitCode 0
+    Assert-Equal -Expected 'VERIFIED_FAILURE' -Actual $conflictingScopes.scriptCompilation.status -Message 'Editor.log failure overrides a successful NUnit XML for compilation'
+    Assert-Equal -Expected 'BLOCKED' -Actual $conflictingScopes.playModeTests.status -Message 'Successful XML plus failing Editor.log is an evidence conflict, not a pass'
+    Assert-True -Condition $conflictingScopes.evidenceConflict -Message 'XML success and Editor.log failure conflict is explicit'
+    $malformedScopes = Get-UpvBaseVerificationScopeAssessment -EditorLog $safeLogAnalysis -NUnit $malformedNUnitAnalysis -ExitCode 0
+    Assert-Equal -Expected 'BLOCKED' -Actual $malformedScopes.scriptCompilation.status -Message 'Malformed NUnit XML cannot promote script compilation'
+    Assert-Equal -Expected 'BLOCKED' -Actual $malformedScopes.playModeTests.status -Message 'Malformed NUnit XML blocks PlayMode verification'
+
     $bundle = Get-UpvScenarioBundleAssessment -BundlePath $script:TemplatePath -ProjectRoot $script:FixturePath -ProcessTimeoutSeconds 1800
     Assert-True -Condition $bundle.accepted -Message ('Bundled scenario template is accepted: ' + [string]::Join(' ', [string[]]$bundle.errors))
     Assert-Equal -Expected 'sample-editor-playmode' -Actual $bundle.scenarioId -Message 'Scenario ID round-trips'
@@ -382,11 +696,34 @@ try {
     $afterMutationBundle = Get-UpvScenarioBundleAssessment -BundlePath $mutatingBundle -ProjectRoot $script:FixturePath -ProcessTimeoutSeconds 1800
     Assert-True -Condition ($beforeMutationBundle.treeSha256 -cne $afterMutationBundle.treeSha256) -Message 'Scenario source mutation changes the canonical bundle hash'
 
+    $compileFailureBundle = Join-Path $script:ScratchRoot 'compile-failure-bundle'
+    Copy-Item -LiteralPath $script:TemplatePath -Destination $compileFailureBundle -Recurse -Force
+    $compileFailureSource = Join-Path $compileFailureBundle 'SampleScenarioTests.cs'
+    Write-TestText -Path $compileFailureSource -Content ((Get-Content -Raw -LiteralPath $compileFailureSource) + [Environment]::NewLine + 'this is intentionally invalid C#;')
+    $compileFailureBundleAssessment = Get-UpvScenarioBundleAssessment -BundlePath $compileFailureBundle -ProjectRoot $script:FixturePath -ProcessTimeoutSeconds 1800
+    Assert-True -Condition $compileFailureBundleAssessment.accepted -Message 'Source-only scenario validation does not claim to compile C# before isolated Unity execution'
+    $compileFailureScopes = Get-UpvBaseVerificationScopeAssessment -EditorLog $failureLogAnalysis -NUnit $malformedNUnitAnalysis -ExitCode 1
+    Assert-Equal -Expected 'VERIFIED_FAILURE' -Actual $compileFailureScopes.scriptCompilation.status -Message 'Scenario overlay compiler error is classified as a concrete compilation failure'
+    $compileFailureFinalStatus = Get-UpvFinalStatusAssessment `
+        -OriginalIntegrityStatus 'UNCHANGED' `
+        -GitIntegrityStatus 'UNCHANGED' `
+        -BlockerCount 0 `
+        -FailureCount 1 `
+        -CompatibilityStatus 'VERIFIED_SUCCESS' `
+        -RequiredScopeStatuses @('VERIFIED_FAILURE', 'BLOCKED', 'BLOCKED', 'NOT_VERIFIED')
+    Assert-Equal -Expected 'PLAY_FAILED' -Actual $compileFailureFinalStatus -Message 'Scenario overlay compilation failure is not mislabeled as blocked or verified'
+
     $unsafeBundle = Join-Path $script:ScratchRoot 'unsafe-bundle'
     Write-TestText -Path (Join-Path $unsafeBundle 'manifest.json') -Content (Get-Content -Raw -LiteralPath (Join-Path $script:TemplatePath 'manifest.json'))
     Write-TestText -Path (Join-Path $unsafeBundle 'unsafe.dll') -Content 'not-a-binary'
     $unsafeBundleAssessment = Get-UpvScenarioBundleAssessment -BundlePath $unsafeBundle -ProjectRoot $script:FixturePath -ProcessTimeoutSeconds 1800
     Assert-True -Condition (-not $unsafeBundleAssessment.accepted) -Message 'Precompiled scenario file is rejected'
+
+    $reservedCollisionRoot = Join-Path $script:ScratchRoot 'reserved-overlay-collision'
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $reservedCollisionRoot 'Assets\__UnityPlayVerification'))
+    $reservedCollision = Get-UpvReservedScenarioOverlayAssessment -ProjectCopyPath $reservedCollisionRoot
+    Assert-True -Condition $reservedCollision.collision -Message 'Existing Assets/__UnityPlayVerification path is detected'
+    Assert-True -Condition (-not $reservedCollision.accepted) -Message 'Reserved scenario overlay collision is rejected'
 
     $invalidRegistryPath = Join-Path $script:ScratchRoot 'invalid-compatibility-registry.json'
     $invalidRegistry = Get-Content -Raw -LiteralPath $script:CompatibilityPath | ConvertFrom-Json
@@ -459,10 +796,38 @@ try {
     $integrityAfterSourceChange = Get-StableUnityCopySetFingerprint -ProjectRoot $integrityProject
     Assert-True -Condition ($integrityBefore.treeSha256 -cne $integrityAfterSourceChange.treeSha256) -Message 'Original source-content mutation is detected by the Play copy-set fingerprint'
 
+    $gitIntegrityProject = Join-Path $script:ScratchRoot 'git-integrity-project'
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $gitIntegrityProject '.git'))
+    Write-TestText -Path (Join-Path $gitIntegrityProject '.git\HEAD') -Content "ref: refs/heads/main`n"
+    $gitBefore = Get-BaselineGitMetadataSnapshot -ProjectRoot $gitIntegrityProject
+    Write-TestText -Path (Join-Path $gitIntegrityProject '.git\HEAD') -Content "ref: refs/heads/changed`n"
+    $gitAfter = Get-BaselineGitMetadataSnapshot -ProjectRoot $gitIntegrityProject
+    $gitAssessment = Get-BaselineGitMetadataAssessment -Before $gitBefore -After $gitAfter
+    Assert-Equal -Expected 'CHANGED' -Actual $gitAssessment.status -Message 'Git metadata byte mutation is detected'
+
+    $localSpoofProject = Join-Path $script:ScratchRoot 'local-test-framework-spoof'
+    Copy-Item -LiteralPath $script:FixturePath -Destination $localSpoofProject -Recurse -Force
+    $localSpoofManifestPath = Join-Path $localSpoofProject 'Packages\manifest.json'
+    $localSpoofManifest = Get-Content -Raw -LiteralPath $localSpoofManifestPath | ConvertFrom-Json
+    $localSpoofManifest.dependencies.'com.unity.test-framework' = 'file:UntrustedTestFramework'
+    Write-TestText -Path $localSpoofManifestPath -Content (ConvertTo-Json -Depth 10 -InputObject $localSpoofManifest)
+    $localSpoofLockPath = Join-Path $localSpoofProject 'Packages\packages-lock.json'
+    $localSpoofLock = Get-Content -Raw -LiteralPath $localSpoofLockPath | ConvertFrom-Json
+    $localSpoofLock.dependencies.'com.unity.test-framework'.source = 'local'
+    $localSpoofLock.dependencies.'com.unity.test-framework'.PSObject.Properties.Remove('url')
+    Write-TestText -Path $localSpoofLockPath -Content (ConvertTo-Json -Depth 10 -InputObject $localSpoofLock)
+    Write-TestText -Path (Join-Path $localSpoofProject 'Packages\UntrustedTestFramework\package.json') -Content '{"name":"com.unity.test-framework","version":"1.1.33"}'
+    $localSpoofProduction = Invoke-TestVerifier -Arguments @('-ProjectRoot', $localSpoofProject)
+    Assert-True -Condition $localSpoofProduction.result.preflight.localPackagesSafe -Message 'Reproduction reaches provenance after the project-local file package passes copy safety'
+    Assert-Equal -Expected 'local' -Actual $localSpoofProduction.result.compatibility.provenance.packagesLockSource -Message 'Rejected production evidence records the actual local package source'
+    Assert-True -Condition (@($localSpoofProduction.result.blockers | Where-Object { $_.code -eq 'TEST_FRAMEWORK_PROVENANCE_REJECTED' }).Count -eq 1) -Message 'Production entrypoint blocks same-version local Test Framework provenance'
+    Assert-True -Condition (-not $localSpoofProduction.result.unity.processStarted) -Message 'Local Test Framework spoof is blocked before Unity starts'
+    Assert-Equal -Expected 'VERIFICATION_BLOCKED' -Actual $localSpoofProduction.result.finalStatus -Message 'Local Test Framework spoof cannot reach PLAY_VERIFIED'
+
     $fakeUnityPath = New-UpvUnsignedFakeUnity `
-        -OutputPath (Join-Path $script:ScratchRoot 'fake-unity\6000.0.69f1\Editor\Unity.exe') `
-        -ProductVersion '6000.0.69f1_fixture'
-    Assert-True -Condition ((Get-Item -LiteralPath $fakeUnityPath).VersionInfo.ProductVersion -match '^6000\.0\.69f1(?:_|$)') -Message 'Unsigned fake exposes the approved exact ProductVersion token'
+        -OutputPath (Join-Path $script:ScratchRoot 'fake-unity\2022.3.62f3\Editor\Unity.exe') `
+        -ProductVersion '2022.3.62f3_fixture'
+    Assert-True -Condition ((Get-Item -LiteralPath $fakeUnityPath).VersionInfo.ProductVersion -match '^2022\.3\.62f3(?:_|$)') -Message 'Unsigned fake exposes the approved exact ProductVersion token'
     Assert-Equal -Expected 'NotSigned' -Actual ([string](Get-AuthenticodeSignature -LiteralPath $fakeUnityPath).Status) -Message 'Fake Unity remains unsigned'
 
     $processRoot = Join-Path $script:ScratchRoot 'internal-process'
@@ -501,13 +866,10 @@ try {
 
     $approvedFixturePath = Join-Path $script:ScratchRoot 'approved-production-fixture'
     Copy-Item -LiteralPath $script:FixturePath -Destination $approvedFixturePath -Recurse -Force
-    $approvedManifestPath = Join-Path $approvedFixturePath 'Packages\manifest.json'
-    $approvedManifest = Get-Content -Raw -LiteralPath $approvedManifestPath | ConvertFrom-Json
-    $approvedManifest.dependencies.'com.unity.test-framework' = '1.6.0'
-    Write-TestText -Path $approvedManifestPath -Content (ConvertTo-Json -Depth 10 -InputObject $approvedManifest)
+    Write-TestText -Path (Join-Path $approvedFixturePath 'ProjectSettings\ProjectVersion.txt') -Content "m_EditorVersion: 2022.3.62f3`r`nm_EditorVersionWithRevision: 2022.3.62f3 (96770f904ca7)`r`n"
     $approvedLockPath = Join-Path $approvedFixturePath 'Packages\packages-lock.json'
     $approvedLock = Get-Content -Raw -LiteralPath $approvedLockPath | ConvertFrom-Json
-    $approvedLock.dependencies.'com.unity.test-framework'.version = '1.6.0'
+    $approvedLock.dependencies.'com.unity.test-framework'.url = 'https://packages.unity.com'
     Write-TestText -Path $approvedLockPath -Content (ConvertTo-Json -Depth 10 -InputObject $approvedLock)
     $unsignedProduction = Invoke-TestVerifier -Arguments @('-ProjectRoot', $approvedFixturePath, '-UnityExecutable', $fakeUnityPath)
     Assert-Equal -Expected 'VERIFICATION_BLOCKED' -Actual $unsignedProduction.result.finalStatus -Message 'Production entrypoint blocks exact-version unsigned fake Unity'
@@ -517,8 +879,12 @@ try {
         Assert-True -Condition $true -Message 'Production trust check remains fail-closed when local CIM access prevents reaching the signature gate'
     } else {
         Assert-True -Condition $unsignedProduction.result.unity.executableVersionMatched -Message 'Production fake reaches trust validation with matching ProductVersion'
-        Assert-Equal -Expected 'NotSigned' -Actual $unsignedProduction.result.unity.signatureStatus -Message 'Production result records unsigned Authenticode status'
-        Assert-True -Condition (@($unsignedProduction.result.blockers | Where-Object { $_.code -eq 'UNITY_EXECUTABLE_REJECTED' }).Count -eq 1) -Message 'Production unsigned fake is rejected by the executable trust gate'
+        $unsignedTrustBlockers = @($unsignedProduction.result.blockers | Where-Object { $_.code -eq 'UNITY_EXECUTABLE_REJECTED' })
+        Assert-Equal -Expected 1 -Actual $unsignedTrustBlockers.Count -Message 'Production unsigned fake is rejected by the executable trust gate'
+        Assert-True -Condition ($unsignedTrustBlockers[0].message -match '(?i)signature|signed|publisher') -Message 'Production trust rejection is specifically signature or publisher related'
+        if (-not [string]::IsNullOrWhiteSpace([string]$unsignedProduction.result.unity.signatureStatus)) {
+            Assert-Equal -Expected 'NotSigned' -Actual $unsignedProduction.result.unity.signatureStatus -Message 'Production result records unsigned Authenticode status when the host exposes it'
+        }
     }
 
     $production = Invoke-TestVerifier -Arguments @('-ProjectRoot', $script:FixturePath)
@@ -531,6 +897,12 @@ try {
     Assert-SchemaValid -Instance $production.result -SchemaPath $script:ResultSchemaPath -Message 'Production result validates against schema'
     $savedResult = Get-Content -Raw -LiteralPath $production.result.artifacts.resultPath | ConvertFrom-Json
     Assert-Equal -Expected $production.result.finalStatus -Actual $savedResult.finalStatus -Message 'Saved result matches stdout semantics'
+
+    $insideArtifactRoot = Join-Path $script:FixturePath '__forbidden-upv-artifacts'
+    $insideArtifacts = Invoke-TestVerifier -Arguments @('-ProjectRoot', $script:FixturePath, '-ArtifactsRoot', $insideArtifactRoot)
+    Assert-Equal -Expected 'VERIFICATION_BLOCKED' -Actual $insideArtifacts.result.finalStatus -Message 'ArtifactsRoot inside the original project is blocked'
+    Assert-True -Condition (@($insideArtifacts.result.blockers | Where-Object { $_.code -eq 'ARTIFACT_ROOT_REJECTED' }).Count -eq 1) -Message 'Artifact boundary blocker is explicit'
+    Assert-True -Condition (-not (Test-Path -LiteralPath $insideArtifactRoot)) -Message 'Rejected in-project ArtifactsRoot is never created'
 
     $conflict = Invoke-TestVerifier -Arguments @(
         '-ProjectRoot', $script:FixturePath,
@@ -546,7 +918,7 @@ try {
     Assert-True -Condition ($skillMetadata -match 'allow_implicit_invocation:\s*false') -Message 'Play Skill is explicit-only'
     Assert-True -Condition ($skillInstructions -match '\$unity-play-verification') -Message 'Skill instructions require literal invocation'
     Assert-True -Condition ($runnerContent -match 'Scenario bundle changed after validation and before isolated overlay copy') -Message 'Runner rechecks scenario bundle hash at copy time'
-    Assert-True -Condition ($runnerContent -match "originalProjectIntegrity\.status -eq 'CHANGED'") -Message 'Final-status precedence detects changed original copy-set'
+    Assert-True -Condition ($argumentContractContent -match "OriginalIntegrityStatus -ceq 'CHANGED'") -Message 'Final-status precedence detects changed original copy-set'
     Assert-True -Condition ($runnerContent -match "scripts\\vendor|ChildPath 'vendor'") -Message 'Runner resolves its bundled vendor tree'
     Assert-True -Condition ($runnerContent -notmatch 'unity-project-doctor\\scripts|unity-baseline-verification\\scripts') -Message 'Runner has no sibling Skill runtime path'
     foreach ($requiredArgument in @('-batchmode', '-forgetProjectPath', '-runTests', '-testPlatform', 'PlayMode', '-testResults')) {

@@ -5,7 +5,7 @@ description: "Run approved Unity Editor PlayMode tests or a validated source-onl
 
 # Unity Play Verification
 
-Use the bundled PowerShell entrypoint as the sole source of dynamic Play verification truth. The verifier creates an external project copy, starts only an exact signed and approved Unity editor, parses NUnit XML and Editor.log together, and proves the original project stayed unchanged.
+Use the bundled PowerShell entrypoint as the sole source of dynamic Play verification truth. The verifier creates an external project copy, starts only an exact signed and approved Unity editor, requires official-registry Test Framework provenance plus the approved resolved package tree, parses NUnit XML and Editor.log together, and proves the original project stayed unchanged.
 
 ## Invocation policy
 
@@ -33,7 +33,7 @@ Use scenario mode only when the user requests project-specific input, interactio
 ~~~powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner `
     -ProjectRoot (Get-Location).Path `
-    -ScenarioBundlePath "C:\external\scenario-bundle"
+    -ScenarioBundlePath "E:\CodexValidation\scenario-bundle"
 ~~~
 
 - Keep the scenario bundle outside the Unity project.
@@ -42,6 +42,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner `
 - Use the new Input System's test APIs only when the target project already depends on that package.
 - For legacy input, call an existing project test seam or public gameplay API; never automate operating-system keyboard, mouse, focus, or screen coordinates.
 - Treat screenshots as retained evidence only. Do not change the machine-readable final status from visual interpretation.
+
+## Trust boundary
+
+- Accept only the source kind recorded by the exact compatibility entry: official Unity registry or Editor-builtin bound to the approved Unity.exe SHA-256. Treat local, embedded, git, tarball, cross-source, ambiguous, custom-scoped-registry, Editor-hash mismatch, and package-tree mismatch results as blockers.
+- Source-only is not a security sandbox. Project and scenario C# run with Unity's current-user privileges.
+- Use only reviewed local project and scenario source. Do not claim containment of a fully malicious project or tamper-proof same-user artifacts.
+- A post-run package hash protects the verdict from promotion; it does not prevent project code from executing before that check.
 
 ## Result handling
 

@@ -56,6 +56,7 @@ $script:ProcessLibraryPath = Join-Path -Path $script:SharedLibraryRoot -ChildPat
 $script:GitIntegrityLibraryPath = Join-Path -Path $script:SharedLibraryRoot -ChildPath 'git-metadata-integrity.ps1'
 $script:IsolationPathBudgetLibraryPath = Join-Path -Path $script:SharedLibraryRoot -ChildPath 'unity-isolation-path-budget.ps1'
 $script:CoreLibraryPath = Join-Path -Path $PSScriptRoot -ChildPath 'lib\unity-play-verification-core.ps1'
+$script:IdentityLibraryPath = Join-Path -Path $PSScriptRoot -ChildPath 'lib\unity-test-framework-identity.ps1'
 $script:CompatibilityRegistryPath = Join-Path -Path $script:SkillRoot -ChildPath 'config\unity-play-compatibility.json'
 $script:HarnessRoot = Join-Path -Path $script:SkillRoot -ChildPath 'harness'
 $script:Blockers = New-Object System.Collections.ArrayList
@@ -70,6 +71,8 @@ $script:OriginalFingerprintAfter = $null
 $script:GitSnapshotBefore = $null
 $script:GitSnapshotAfter = $null
 $script:ScenarioBundle = $null
+$script:TestFrameworkProvenance = $null
+$script:CompatibilityAssessment = $null
 
 [Console]::OutputEncoding = $script:Utf8NoBom
 
@@ -79,7 +82,8 @@ foreach ($libraryPath in @(
     $script:ProcessLibraryPath,
     $script:GitIntegrityLibraryPath,
     $script:IsolationPathBudgetLibraryPath,
-    $script:CoreLibraryPath
+    $script:CoreLibraryPath,
+    $script:IdentityLibraryPath
 )) {
     if (-not (Test-Path -LiteralPath $libraryPath -PathType Leaf)) {
         throw "Required Unity Play Verification library was not found: $libraryPath"
@@ -110,13 +114,79 @@ function New-UpvResult {
         compatibility = [ordered]@{
             registryPath = $script:CompatibilityRegistryPath
             registrySchemaVersion = $null
+            verificationStatus = 'NOT_VERIFIED'
+            reason = 'Test Framework provenance and resolved package identity have not been verified.'
             unityVersion = $null
             testFrameworkVersion = $null
             testFrameworkSource = $null
             entryFound = $false
             entryStatus = $null
+            allowedSourceKind = $null
+            registryOrigin = $null
+            unityExecutableSha256 = $null
+            packageTreeSha256 = $null
+            hashCanonicalization = $null
             evidencePath = $null
             approved = $false
+            provenance = [ordered]@{
+                packageName = 'com.unity.test-framework'
+                manifestPath = $null
+                packagesLockPath = $null
+                manifestDependency = $null
+                declaredVersion = $null
+                resolvedVersion = $null
+                packagesLockSource = $null
+                packagesLockUrl = $null
+                registryOrigin = $null
+                expectedRegistryOrigin = $null
+                registryOriginMatched = $false
+                allowedSourceKinds = @()
+                sourcePolicyMatched = $false
+                scopedRegistryInterceptors = @()
+                sourceEvidence = @()
+                accepted = $false
+                errors = @()
+            }
+            postRunProvenance = [ordered]@{
+                packageName = 'com.unity.test-framework'
+                manifestPath = $null
+                packagesLockPath = $null
+                manifestDependency = $null
+                declaredVersion = $null
+                resolvedVersion = $null
+                packagesLockSource = $null
+                packagesLockUrl = $null
+                registryOrigin = $null
+                expectedRegistryOrigin = $null
+                registryOriginMatched = $false
+                allowedSourceKinds = @()
+                sourcePolicyMatched = $false
+                scopedRegistryInterceptors = @()
+                sourceEvidence = @()
+                accepted = $false
+                errors = @()
+            }
+            packageIdentity = [ordered]@{
+                packageName = 'com.unity.test-framework'
+                declaredVersion = $null
+                resolvedVersion = $null
+                packagesLockSource = $null
+                registryOrigin = $null
+                expectedSourceKind = $null
+                expectedRegistryOrigin = $null
+                sourceEvidence = @()
+                packageCacheRoot = $null
+                resolvedPackagePath = $null
+                candidateCount = 0
+                fileCount = 0
+                snapshotAttempts = 0
+                hashCanonicalization = $null
+                treeSha256 = $null
+                expectedTreeSha256 = $null
+                identityMatched = $false
+                accepted = $false
+                errors = @()
+            }
         }
         unity = [ordered]@{
             executablePath = $null
@@ -337,6 +407,16 @@ function Add-UpvBlocker {
     )
 
     [void]$script:Blockers.Add([ordered]@{ code = $Code; check = $Check; path = $Path; message = $Message })
+}
+
+# Marks the Test Framework provenance or content-identity contract explicitly blocked.
+function Set-UpvCompatibilityBlocked {
+    param(
+        [Parameter(Mandatory = $true)][string]$Reason
+    )
+
+    $script:Result.compatibility.verificationStatus = 'BLOCKED'
+    $script:Result.compatibility.reason = $Reason
 }
 
 # Adds one concrete compilation, test, crash, or scenario failure.
@@ -668,38 +748,88 @@ function Get-UpvLocalPackageAssessment {
     return [pscustomobject]$assessment
 }
 
-# Resolves the exact signed editor and enforces the approved Unity/Test Framework pair.
+# Resolves the exact approved Editor and enforces the source-specific Test Framework identity contract.
 function Test-UpvCompatibilityAndEditor {
     if ([string]::IsNullOrWhiteSpace([string]$script:Result.compatibility.unityVersion)) {
-        Add-UpvBlocker -Code 'UNITY_VERSION_UNAVAILABLE' -Check 'compatibility' -Path $script:NormalizedProjectRoot -Message 'The exact project Unity version is unavailable.'
+        $message = 'The exact project Unity version is unavailable.'
+        Set-UpvCompatibilityBlocked -Reason $message
+        Add-UpvBlocker -Code 'UNITY_VERSION_UNAVAILABLE' -Check 'compatibility' -Path $script:NormalizedProjectRoot -Message $message
         return
     }
 
-    $framework = Get-UpvTestFrameworkVersion -ProjectRoot $script:NormalizedProjectRoot
-    $script:Result.compatibility.testFrameworkVersion = $framework.version
-    $script:Result.compatibility.testFrameworkSource = $framework.packageSource
-    if ($framework.status -ne 'RESOLVED') {
-        Add-UpvBlocker -Code 'TEST_FRAMEWORK_VERSION_UNAVAILABLE' -Check 'compatibility' -Path $framework.sourcePath -Message ([string]$framework.error)
+    $script:TestFrameworkProvenance = Get-UpvTestFrameworkProvenanceAssessment -ProjectRoot $script:NormalizedProjectRoot
+    foreach ($property in @(
+        'packageName', 'manifestPath', 'packagesLockPath', 'manifestDependency', 'declaredVersion',
+        'resolvedVersion', 'packagesLockSource', 'packagesLockUrl', 'registryOrigin',
+        'expectedRegistryOrigin', 'registryOriginMatched', 'allowedSourceKinds', 'sourcePolicyMatched', 'scopedRegistryInterceptors',
+        'sourceEvidence', 'accepted', 'errors'
+    )) {
+        $script:Result.compatibility.provenance[$property] = $script:TestFrameworkProvenance.$property
+    }
+    $script:Result.compatibility.testFrameworkVersion = $script:TestFrameworkProvenance.resolvedVersion
+    $script:Result.compatibility.testFrameworkSource = $script:TestFrameworkProvenance.packagesLockSource
+    if (-not $script:TestFrameworkProvenance.accepted) {
+        $message = [string]::Join(' ', [string[]]@($script:TestFrameworkProvenance.errors))
+        Set-UpvCompatibilityBlocked -Reason $message
+        Add-UpvBlocker -Code 'TEST_FRAMEWORK_PROVENANCE_REJECTED' -Check 'compatibility' -Path $script:TestFrameworkProvenance.packagesLockPath -Message $message
         return
     }
 
-    $compatibility = Get-UpvCompatibilityAssessment `
+    $script:CompatibilityAssessment = Get-UpvCompatibilityAssessment `
         -RegistryPath $script:CompatibilityRegistryPath `
         -UnityVersion $script:Result.compatibility.unityVersion `
-        -TestFrameworkVersion $framework.version
-    foreach ($property in @('registrySchemaVersion', 'entryFound', 'entryStatus', 'evidencePath', 'approved')) {
+        -TestFrameworkVersion $script:TestFrameworkProvenance.resolvedVersion
+    $compatibility = $script:CompatibilityAssessment
+    foreach ($property in @(
+        'registrySchemaVersion', 'entryFound', 'entryStatus', 'allowedSourceKind', 'registryOrigin',
+        'unityExecutableSha256', 'packageTreeSha256', 'hashCanonicalization', 'evidencePath', 'approved'
+    )) {
         $script:Result.compatibility[$property] = $compatibility.$property
     }
     if (-not [string]::IsNullOrWhiteSpace([string]$compatibility.error)) {
+        Set-UpvCompatibilityBlocked -Reason $compatibility.error
         Add-UpvBlocker -Code 'COMPATIBILITY_REGISTRY_INVALID' -Check 'compatibility' -Path $script:CompatibilityRegistryPath -Message $compatibility.error
         return
     }
     if (-not $compatibility.entryFound) {
-        Add-UpvBlocker -Code 'UNITY_TEST_FRAMEWORK_PAIR_UNKNOWN' -Check 'compatibility' -Path $script:CompatibilityRegistryPath -Message "Unity $($compatibility.unityVersion) with Test Framework $($compatibility.testFrameworkVersion) is not registered."
+        $message = "Unity $($compatibility.unityVersion) with Test Framework $($compatibility.testFrameworkVersion) is not registered."
+        Set-UpvCompatibilityBlocked -Reason $message
+        Add-UpvBlocker -Code 'UNITY_TEST_FRAMEWORK_PAIR_UNKNOWN' -Check 'compatibility' -Path $script:CompatibilityRegistryPath -Message $message
         return
     }
     if (-not $compatibility.approved) {
-        Add-UpvBlocker -Code 'UNITY_TEST_FRAMEWORK_PAIR_NOT_APPROVED' -Check 'compatibility' -Path $compatibility.evidencePath -Message "The exact compatibility pair is $($compatibility.entryStatus), not APPROVED."
+        $message = "The exact compatibility pair is $($compatibility.entryStatus), not APPROVED."
+        Set-UpvCompatibilityBlocked -Reason $message
+        Add-UpvBlocker -Code 'UNITY_TEST_FRAMEWORK_PAIR_NOT_APPROVED' -Check 'compatibility' -Path $compatibility.evidencePath -Message $message
+        return
+    }
+    $script:TestFrameworkProvenance = Get-UpvTestFrameworkProvenanceAssessment `
+        -ProjectRoot $script:NormalizedProjectRoot `
+        -AllowedSourceKinds ([string[]]@($compatibility.allowedSourceKind))
+    foreach ($property in @(
+        'packageName', 'manifestPath', 'packagesLockPath', 'manifestDependency', 'declaredVersion',
+        'resolvedVersion', 'packagesLockSource', 'packagesLockUrl', 'registryOrigin',
+        'expectedRegistryOrigin', 'registryOriginMatched', 'allowedSourceKinds', 'sourcePolicyMatched', 'scopedRegistryInterceptors',
+        'sourceEvidence', 'accepted', 'errors'
+    )) {
+        $script:Result.compatibility.provenance[$property] = $script:TestFrameworkProvenance.$property
+    }
+    $originMatched = if ($compatibility.allowedSourceKind -ceq 'registry') {
+        [string]$compatibility.registryOrigin -ceq [string]$script:TestFrameworkProvenance.registryOrigin
+    } else {
+        $null -eq $compatibility.registryOrigin -and $null -eq $script:TestFrameworkProvenance.registryOrigin
+    }
+    if (
+        -not $script:TestFrameworkProvenance.accepted -or
+        $compatibility.allowedSourceKind -cne [string]$script:TestFrameworkProvenance.packagesLockSource -or
+        -not $originMatched
+    ) {
+        $message = 'Test Framework preflight provenance does not match the approved source-specific compatibility contract.'
+        if (@($script:TestFrameworkProvenance.errors).Count -gt 0) {
+            $message += ' ' + [string]::Join(' ', [string[]]@($script:TestFrameworkProvenance.errors))
+        }
+        Set-UpvCompatibilityBlocked -Reason $message
+        Add-UpvBlocker -Code 'TEST_FRAMEWORK_PROVENANCE_MISMATCH' -Check 'compatibility' -Path $script:TestFrameworkProvenance.packagesLockPath -Message $message
         return
     }
 
@@ -714,7 +844,9 @@ function Test-UpvCompatibilityAndEditor {
     $script:Result.unity.resolutionSource = $resolution.selectedSource
     $script:Result.unity.candidates = @($resolution.candidates)
     if ([string]::IsNullOrWhiteSpace([string]$resolution.selectedPath)) {
-        Add-UpvBlocker -Code 'UNITY_EXECUTABLE_NOT_FOUND' -Check 'unityExecutable' -Path $null -Message "Exact Unity $($resolution.requiredVersion) was not found."
+        $message = "Exact Unity $($resolution.requiredVersion) was not found."
+        Set-UpvCompatibilityBlocked -Reason $message
+        Add-UpvBlocker -Code 'UNITY_EXECUTABLE_NOT_FOUND' -Check 'unityExecutable' -Path $null -Message $message
         return
     }
 
@@ -756,9 +888,12 @@ function Test-UpvCompatibilityAndEditor {
         if (-not $script:Result.unity.executableVersionMatched) { throw 'Unity.exe ProductVersion does not match the exact project version.' }
         if ($script:Result.unity.signatureStatus -cne 'Valid') { throw "Unity.exe signature status is $($script:Result.unity.signatureStatus), not Valid." }
         if (-not $script:Result.unity.publisherMatched) { throw 'Unity.exe signer does not identify Unity Technologies.' }
-        Add-UpvEvidence -Check 'compatibility' -Status 'PASSED' -Source $script:CompatibilityRegistryPath -Detail "Approved Unity $($compatibility.unityVersion) and Test Framework $($compatibility.testFrameworkVersion) pair selected."
-        Add-UpvEvidence -Check 'unityExecutable' -Status 'PASSED' -Source $path -Detail 'Exact ProductVersion and a valid Unity Technologies Authenticode signature were confirmed.'
+        if ($script:Result.unity.executableSha256 -cne $compatibility.unityExecutableSha256) { throw 'Unity.exe SHA-256 does not match the approved compatibility identity.' }
+        $script:Result.compatibility.reason = 'Preflight provenance and signed Unity are accepted; resolved package content identity is pending.'
+        Add-UpvEvidence -Check 'compatibilityPreflight' -Status 'PASSED' -Source $script:CompatibilityRegistryPath -Detail "Approved Unity $($compatibility.unityVersion), Test Framework $($compatibility.testFrameworkVersion), and $($compatibility.allowedSourceKind) provenance were selected."
+        Add-UpvEvidence -Check 'unityExecutable' -Status 'PASSED' -Source $path -Detail 'Exact ProductVersion, approved executable SHA-256, and a valid Unity Technologies Authenticode signature were confirmed.'
     } catch {
+        Set-UpvCompatibilityBlocked -Reason $_.Exception.Message
         Add-UpvBlocker -Code 'UNITY_EXECUTABLE_REJECTED' -Check 'unityExecutable' -Path $script:Result.unity.executablePath -Message $_.Exception.Message
     }
 }
@@ -870,9 +1005,10 @@ function Add-UpvScenarioOverlay {
             throw ([string]::Join(' ', [string[]]@($script:ScenarioBundle.errors)))
         }
 
-        $reservedRoot = Join-Path -Path $script:Result.isolation.projectCopyPath -ChildPath 'Assets\__UnityPlayVerification'
-        if (Test-Path -LiteralPath $reservedRoot) {
-            throw 'The isolated base project already contains the reserved Assets/__UnityPlayVerification path.'
+        $reservedAssessment = Get-UpvReservedScenarioOverlayAssessment -ProjectCopyPath $script:Result.isolation.projectCopyPath
+        $reservedRoot = $reservedAssessment.path
+        if (-not $reservedAssessment.accepted) {
+            throw $reservedAssessment.error
         }
         $harnessDestination = Join-Path -Path $reservedRoot -ChildPath 'Harness'
         $scenarioDestination = Join-Path -Path $reservedRoot -ChildPath 'Scenario'
@@ -949,7 +1085,8 @@ function Invoke-UpvUnity {
         -WorkingDirectory $script:SessionRoot `
         -StandardOutputPath $script:Result.artifacts.standardOutputPath `
         -StandardErrorPath $script:Result.artifacts.standardErrorPath `
-        -TimeoutSeconds $TimeoutSeconds
+        -TimeoutSeconds $TimeoutSeconds `
+        -TreeExitGraceMilliseconds 15000
     $script:Result.unity.processStarted = $process.processStarted
     $script:Result.unity.timedOut = $process.timedOut
     $script:Result.unity.exitCode = $process.exitCode
@@ -963,20 +1100,106 @@ function Invoke-UpvUnity {
     if ($process.processStarted) {
         Add-UpvEvidence -Check 'unityProcess' -Status 'OBSERVED' -Source $script:Result.unity.executablePath -Detail 'The exact signed Unity.exe started against only the isolated project.'
     }
-    if (
+    $jobSetupFailed = (
         -not $process.jobObjectCreated -or
         -not $process.killOnJobCloseConfigured -or
-        ($process.processStarted -and -not $process.processAssignedToJob) -or
-        -not [string]::IsNullOrWhiteSpace([string]$process.controlError
-        )
-    ) {
+        ($process.processStarted -and -not $process.processAssignedToJob)
+    )
+    if ($jobSetupFailed) {
         Add-UpvBlocker -Code 'UNITY_JOB_OBJECT_CONTROL_FAILED' -Check 'unityProcess' -Path $script:Result.unity.executablePath -Message "Unity process control failed: $($process.controlError)"
+    }
+    if (-not $jobSetupFailed -and -not [string]::IsNullOrWhiteSpace([string]$process.controlError)) {
+        $controlledTerminationCompleted = (
+            $process.processTreeExitVerified -and
+            [int]$process.activeProcessCountAfterWait -eq 0 -and
+            $process.terminationRequested -and
+            $process.terminationApiSucceeded -and
+            $null -ne $process.exitCode -and
+            [long]$process.exitCode -ne 0
+        )
+        if ($controlledTerminationCompleted) {
+            Add-UpvWarning -Code 'UNITY_DESCENDANTS_TERMINATED' -Check 'unityProcess' -Path $script:Result.unity.executablePath -Message "Job Object termination reached zero active processes after: $($process.controlError)"
+        } else {
+            Add-UpvBlocker -Code 'UNITY_JOB_OBJECT_CONTROL_FAILED' -Check 'unityProcess' -Path $script:Result.unity.executablePath -Message "Unity process control failed: $($process.controlError)"
+        }
     }
     if ($process.processStarted -and -not $process.processTreeExitVerified) {
         Add-UpvBlocker -Code 'UNITY_PROCESS_TREE_EXIT_UNPROVEN' -Check 'unityProcess' -Path $script:Result.unity.executablePath -Message 'The verifier could not prove that Unity and all assigned descendants exited.'
     } elseif ($process.processStarted) {
         Add-UpvEvidence -Check 'unityProcessTree' -Status 'PASSED' -Source $script:Result.unity.executablePath -Detail 'Job Object accounting reached zero active processes.'
     }
+}
+
+# Verifies the exact resolved Test Framework package tree after the isolated Unity process has exited.
+function Set-UpvResolvedTestFrameworkIdentity {
+    if (
+        -not $script:Result.unity.processStarted -or
+        $script:Result.unity.timedOut -or
+        -not $script:Result.processControl.processTreeExitVerified
+    ) {
+        $message = 'Resolved Test Framework identity cannot be inspected without a completed, terminated Unity process tree.'
+        Set-UpvCompatibilityBlocked -Reason $message
+        Add-UpvBlocker -Code 'TEST_FRAMEWORK_IDENTITY_UNAVAILABLE' -Check 'compatibility' -Path $script:Result.isolation.projectCopyPath -Message $message
+        return
+    }
+    if ($null -eq $script:TestFrameworkProvenance -or $null -eq $script:CompatibilityAssessment) {
+        $message = 'Test Framework provenance or approved identity metadata is unavailable after Unity execution.'
+        Set-UpvCompatibilityBlocked -Reason $message
+        Add-UpvBlocker -Code 'TEST_FRAMEWORK_IDENTITY_UNAVAILABLE' -Check 'compatibility' -Path $script:Result.isolation.projectCopyPath -Message $message
+        return
+    }
+
+    $postRunProvenance = Get-UpvTestFrameworkProvenanceAssessment `
+        -ProjectRoot $script:Result.isolation.projectCopyPath `
+        -AllowedSourceKinds ([string[]]@($script:CompatibilityAssessment.allowedSourceKind))
+    foreach ($property in @(
+        'packageName', 'manifestPath', 'packagesLockPath', 'manifestDependency', 'declaredVersion',
+        'resolvedVersion', 'packagesLockSource', 'packagesLockUrl', 'registryOrigin',
+        'expectedRegistryOrigin', 'registryOriginMatched', 'allowedSourceKinds', 'sourcePolicyMatched', 'scopedRegistryInterceptors',
+        'sourceEvidence', 'accepted', 'errors'
+    )) {
+        $script:Result.compatibility.postRunProvenance[$property] = $postRunProvenance.$property
+    }
+    if (-not $postRunProvenance.accepted) {
+        $message = 'Post-run isolated Test Framework provenance was rejected: ' + [string]::Join(' ', [string[]]@($postRunProvenance.errors))
+        Set-UpvCompatibilityBlocked -Reason $message
+        Add-UpvBlocker -Code 'TEST_FRAMEWORK_POST_RUN_PROVENANCE_REJECTED' -Check 'compatibility' -Path $postRunProvenance.packagesLockPath -Message $message
+        return
+    }
+    foreach ($property in @('declaredVersion', 'resolvedVersion', 'packagesLockSource', 'registryOrigin')) {
+        if ([string]$postRunProvenance.$property -cne [string]$script:TestFrameworkProvenance.$property) {
+            $message = "Post-run isolated Test Framework provenance changed property '$property'."
+            Set-UpvCompatibilityBlocked -Reason $message
+            Add-UpvBlocker -Code 'TEST_FRAMEWORK_PROVENANCE_CHANGED' -Check 'compatibility' -Path $postRunProvenance.packagesLockPath -Message $message
+            return
+        }
+    }
+
+    $identity = Get-UpvResolvedTestFrameworkIdentityAssessment `
+        -ProjectRoot $script:Result.isolation.projectCopyPath `
+        -Provenance $postRunProvenance `
+        -ExpectedVersion $script:CompatibilityAssessment.testFrameworkVersion `
+        -ExpectedSourceKind $script:CompatibilityAssessment.allowedSourceKind `
+        -ExpectedRegistryOrigin $script:CompatibilityAssessment.registryOrigin `
+        -ExpectedTreeSha256 $script:CompatibilityAssessment.packageTreeSha256 `
+        -ExpectedCanonicalization $script:CompatibilityAssessment.hashCanonicalization
+    foreach ($property in @(
+        'packageName', 'declaredVersion', 'resolvedVersion', 'packagesLockSource', 'registryOrigin',
+        'expectedSourceKind', 'expectedRegistryOrigin', 'sourceEvidence', 'packageCacheRoot', 'resolvedPackagePath', 'candidateCount', 'fileCount',
+        'snapshotAttempts', 'hashCanonicalization', 'treeSha256', 'expectedTreeSha256', 'identityMatched', 'accepted', 'errors'
+    )) {
+        $script:Result.compatibility.packageIdentity[$property] = $identity.$property
+    }
+    if (-not $identity.accepted) {
+        $message = [string]::Join(' ', [string[]]@($identity.errors))
+        Set-UpvCompatibilityBlocked -Reason $message
+        Add-UpvBlocker -Code 'TEST_FRAMEWORK_PACKAGE_IDENTITY_REJECTED' -Check 'compatibility' -Path $identity.resolvedPackagePath -Message $message
+        return
+    }
+
+    $script:Result.compatibility.verificationStatus = 'VERIFIED_SUCCESS'
+    $script:Result.compatibility.reason = 'Preflight and post-run source-specific provenance, signed Editor identity, and the resolved Test Framework package tree match the approved compatibility entry.'
+    Add-UpvEvidence -Check 'testFrameworkPackageIdentity' -Status 'PASSED' -Source $identity.resolvedPackagePath -Detail "Resolved $($identity.packageName) $($identity.resolvedVersion) matched tree SHA-256 $($identity.treeSha256)."
 }
 
 # Maps process, log, NUnit, scenario, and screenshot evidence to verification scopes.
@@ -992,8 +1215,23 @@ function Set-UpvVerificationEvidence {
         return
     }
     if ($script:Result.unity.timedOut) {
+        $script:Result.verification.scriptCompilation.status = 'BLOCKED'
+        $script:Result.verification.scriptCompilation.reason = 'Unity timed out before complete compilation evidence was available.'
+        $script:Result.verification.editorPlayMode.status = 'BLOCKED'
+        $script:Result.verification.editorPlayMode.reason = 'Unity timed out before Editor PlayMode completion was proven.'
+        $script:Result.verification.playModeTests.status = 'BLOCKED'
+        $script:Result.verification.playModeTests.reason = 'Unity timed out before a complete PlayMode result was available.'
         Add-UpvBlocker -Code 'UNITY_PROCESS_TIMEOUT' -Check 'unityProcess' -Path $script:Result.unity.executablePath -Message "Unity exceeded the $TimeoutSeconds second process timeout."
         return
+    }
+
+    $baseScopes = Get-UpvBaseVerificationScopeAssessment `
+        -EditorLog $script:Result.editorLog `
+        -NUnit $script:Result.nunit `
+        -ExitCode $script:Result.unity.exitCode
+    foreach ($scopeName in @('scriptCompilation', 'editorPlayMode', 'playModeTests')) {
+        $script:Result.verification[$scopeName].status = $baseScopes.$scopeName.status
+        $script:Result.verification[$scopeName].reason = $baseScopes.$scopeName.reason
     }
 
     $concreteLogFailure = $script:Result.editorLog.classification -eq 'FAILURE'
@@ -1002,18 +1240,30 @@ function Set-UpvVerificationEvidence {
         $script:Result.verification.scriptCompilation.reason = 'Editor.log contains concrete compilation, package, fatal, crash, or nonzero-exit evidence.'
         Add-UpvFailure -Code 'UNITY_EDITOR_LOG_FAILURE' -Check 'scriptCompilation' -Path $script:Result.artifacts.editorLogPath -Message $script:Result.verification.scriptCompilation.reason
     } elseif ($script:Result.editorLog.classification -eq 'INCONCLUSIVE') {
+        $script:Result.verification.scriptCompilation.status = 'BLOCKED'
+        $script:Result.verification.scriptCompilation.reason = 'Editor.log is missing required markers, so compilation evidence is incomplete.'
         Add-UpvBlocker -Code 'EDITOR_LOG_INCONCLUSIVE' -Check 'editorLog' -Path $script:Result.artifacts.editorLogPath -Message "Editor.log is missing required markers: $([string]::Join(', ', [string[]]@($script:Result.editorLog.missingRequiredMarkers)))"
     } elseif (-not $script:Result.editorLog.exists) {
+        $script:Result.verification.scriptCompilation.status = 'BLOCKED'
+        $script:Result.verification.scriptCompilation.reason = 'Editor.log is missing, so compilation evidence is unavailable.'
         Add-UpvBlocker -Code 'EDITOR_LOG_MISSING' -Check 'editorLog' -Path $script:Result.artifacts.editorLogPath -Message 'Unity did not create Editor.log.'
     }
 
     if ($script:Result.nunit.classification -eq 'INVALID' -or $script:Result.nunit.classification -eq 'NOT_ANALYZED') {
         if (-not $concreteLogFailure) {
+            $script:Result.verification.scriptCompilation.status = 'BLOCKED'
+            $script:Result.verification.scriptCompilation.reason = 'A well-formed NUnit result is required to complete compilation evidence.'
+            $script:Result.verification.playModeTests.status = 'BLOCKED'
+            $script:Result.verification.playModeTests.reason = 'The NUnit result is missing or malformed.'
             Add-UpvBlocker -Code 'NUNIT_RESULT_INVALID' -Check 'playModeTests' -Path $script:Result.artifacts.testResultsPath -Message ([string]$script:Result.nunit.error)
         }
     } elseif ($script:Result.nunit.classification -eq 'ZERO_TESTS') {
+        $script:Result.verification.playModeTests.status = 'BLOCKED'
+        $script:Result.verification.playModeTests.reason = 'The selected PlayMode run contained zero tests.'
         Add-UpvBlocker -Code 'NO_PLAYMODE_TESTS_EXECUTED' -Check 'playModeTests' -Path $script:Result.artifacts.testResultsPath -Message 'The selected PlayMode test run contained zero tests.'
     } elseif ($script:Result.nunit.classification -eq 'INCOMPLETE' -or $script:Result.nunit.classification -eq 'INCONCLUSIVE') {
+        $script:Result.verification.playModeTests.status = 'BLOCKED'
+        $script:Result.verification.playModeTests.reason = 'Skipped or inconclusive tests prevent complete PlayMode evidence.'
         Add-UpvBlocker -Code 'PLAYMODE_TEST_RUN_INCOMPLETE' -Check 'playModeTests' -Path $script:Result.artifacts.testResultsPath -Message "Strict verification rejects skipped or inconclusive tests (skipped=$($script:Result.nunit.skipped), inconclusive=$($script:Result.nunit.inconclusive))."
     } elseif ($script:Result.nunit.classification -eq 'FAILED') {
         $script:Result.verification.playModeTests.status = 'VERIFIED_FAILURE'
@@ -1029,7 +1279,10 @@ function Set-UpvVerificationEvidence {
         }
     }
 
-    if ($script:Result.editorLog.classification -eq 'SAFE' -and $script:Result.nunit.exists) {
+    if (
+        $script:Result.editorLog.classification -eq 'SAFE' -and
+        $script:Result.nunit.classification -in @('PASSED', 'FAILED', 'ZERO_TESTS', 'INCOMPLETE')
+    ) {
         $script:Result.verification.scriptCompilation.status = 'VERIFIED_SUCCESS'
         $script:Result.verification.scriptCompilation.reason = 'Editor.log is safe and Unity emitted a well-formed test result after project compilation.'
     }
@@ -1075,6 +1328,12 @@ function Set-UpvVerificationEvidence {
                 }
                 Add-UpvEvidence -Check 'scenarioBehavior' -Status 'PASSED' -Source $script:Result.artifacts.scenarioResultPath -Detail $script:Result.verification.scenarioBehavior.reason
             } else {
+                $script:Result.verification.scenarioBehavior.status = 'BLOCKED'
+                $script:Result.verification.scenarioBehavior.reason = 'The scenario receipt or required assertion evidence is incomplete.'
+                if ($script:ScenarioBundle.screenshotIds.Count -gt 0) {
+                    $script:Result.verification.visualEvidence.status = 'BLOCKED'
+                    $script:Result.verification.visualEvidence.reason = 'One or more requested screenshot artifacts are missing or invalid.'
+                }
                 Add-UpvBlocker -Code 'SCENARIO_RECEIPT_REJECTED' -Check 'scenarioBehavior' -Path $script:Result.artifacts.scenarioResultPath -Message ([string]::Join(' ', [string[]]@($receipt.errors)))
             }
         }
@@ -1123,29 +1382,26 @@ function Complete-UpvOriginalIntegrity {
 
 # Applies final-status precedence without promoting incomplete evidence.
 function Complete-UpvResult {
-    $sourceChanged = $script:Result.originalProjectIntegrity.status -eq 'CHANGED'
-    $gitChanged = $script:Result.gitMetadataIntegrity.status -eq 'CHANGED'
-    if ($sourceChanged -or $gitChanged) {
-        $script:Result.finalStatus = 'ORIGINAL_PROJECT_CHANGED'
-    } elseif ($script:Blockers.Count -gt 0) {
-        $script:Result.finalStatus = 'VERIFICATION_BLOCKED'
-    } elseif ($script:Failures.Count -gt 0) {
-        $script:Result.finalStatus = 'PLAY_FAILED'
-    } else {
-        $requiredScopes = @('scriptCompilation', 'editorPlayMode', 'playModeTests')
-        if ($script:Result.selection.mode -eq 'SCENARIO_OVERLAY') {
-            $requiredScopes += 'scenarioBehavior'
-        }
-        $allPassed = $true
-        foreach ($scope in $requiredScopes) {
-            if ($script:Result.verification[$scope].status -cne 'VERIFIED_SUCCESS') {
-                $allPassed = $false
-            }
-        }
-        $script:Result.finalStatus = if ($allPassed) { 'PLAY_VERIFIED' } else { 'VERIFICATION_BLOCKED' }
-        if (-not $allPassed -and $script:Blockers.Count -eq 0) {
-            Add-UpvBlocker -Code 'REQUIRED_SCOPE_NOT_VERIFIED' -Check 'finalStatus' -Path $null -Message 'One or more required Play verification scopes lack positive success evidence.'
-        }
+    $requiredScopes = @('scriptCompilation', 'editorPlayMode', 'playModeTests')
+    if ($script:Result.selection.mode -eq 'SCENARIO_OVERLAY') {
+        $requiredScopes += 'scenarioBehavior'
+    }
+    $requiredStatuses = [string[]]@($requiredScopes | ForEach-Object { [string]$script:Result.verification[$_].status })
+    $script:Result.finalStatus = Get-UpvFinalStatusAssessment `
+        -OriginalIntegrityStatus ([string]$script:Result.originalProjectIntegrity.status) `
+        -GitIntegrityStatus ([string]$script:Result.gitMetadataIntegrity.status) `
+        -BlockerCount $script:Blockers.Count `
+        -FailureCount $script:Failures.Count `
+        -CompatibilityStatus ([string]$script:Result.compatibility.verificationStatus) `
+        -RequiredScopeStatuses $requiredStatuses
+    if (
+        $script:Result.finalStatus -eq 'VERIFICATION_BLOCKED' -and
+        $script:Blockers.Count -eq 0 -and
+        $script:Result.compatibility.verificationStatus -cne 'VERIFIED_SUCCESS'
+    ) {
+        Add-UpvBlocker -Code 'REQUIRED_COMPATIBILITY_NOT_VERIFIED' -Check 'compatibility' -Path $script:CompatibilityRegistryPath -Message 'Test Framework provenance and resolved content identity lack positive success evidence.'
+    } elseif ($script:Result.finalStatus -eq 'VERIFICATION_BLOCKED' -and $script:Blockers.Count -eq 0) {
+        Add-UpvBlocker -Code 'REQUIRED_SCOPE_NOT_VERIFIED' -Check 'finalStatus' -Path $null -Message 'One or more required Play verification scopes lack positive success evidence.'
     }
     $script:Result.warnings = @($script:Warnings)
     $script:Result.failures = @($script:Failures)
@@ -1248,6 +1504,7 @@ try {
     }
     if ($script:Blockers.Count -eq 0) { Add-UpvScenarioOverlay }
     if ($script:Blockers.Count -eq 0) { Invoke-UpvUnity }
+    if ($script:Result.unity.processStarted) { Set-UpvResolvedTestFrameworkIdentity }
     if ($script:Result.unity.processStarted) { Set-UpvVerificationEvidence }
 } catch {
     Add-UpvBlocker -Code 'UNEXPECTED_VERIFIER_ERROR' -Check 'verifier' -Path $script:Result.projectRoot -Message $_.Exception.Message

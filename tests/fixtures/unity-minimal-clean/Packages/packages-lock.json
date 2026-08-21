@@ -3,7 +3,8 @@
     "com.unity.test-framework": {
       "version": "1.1.33",
       "depth": 0,
-      "source": "registry"
+      "source": "registry",
+      "url": "https://packages.unity.com"
     }
   }
 }

@@ -19,9 +19,9 @@ Source repository snapshot:
 | `shared/unity-process-job.ps1` | kill-on-close Windows Job Object execution | `747d64f077c5bb1acfe744082898614ab6489cd4ffb66f8f6f311db635a0b72c` | `747d64f077c5bb1acfe744082898614ab6489cd4ffb66f8f6f311db635a0b72c` |
 | `shared/git-metadata-integrity.ps1` | before/after Git metadata snapshot and assessment | `2feadfb3d199ffc4556e90b1a35036d11f1a70c7b5bbf1207ec3b4eaaa2bcb7d` | `2feadfb3d199ffc4556e90b1a35036d11f1a70c7b5bbf1207ec3b4eaaa2bcb7d` |
 | `shared/unity-isolation-path-budget.ps1` | destination containment and Windows path budget | `4cac8265e1d7eb8eaf6719e1c0378700bfd623acc2a35f61680d53179cebc61f` | `24f9b9b10fa70ab66ed5a5a5ad19516d1ec4ccc5152a9f89a453e7d0ae246974` |
-| `shared/json-schema-validator.ps1` | local Draft 2020-12 subset validation used by tests | `b21559e96b0bc0cc6680ad2278e7a4a696e0b97cc62b00421127fea6da30fa3e` | `b21559e96b0bc0cc6680ad2278e7a4a696e0b97cc62b00421127fea6da30fa3e` |
+| `shared/json-schema-validator.ps1` | local Draft 2020-12 subset validation used by tests; property/array normalization and `oneOf` are patched for Windows PowerShell 5.1 and PowerShell 7.x | `b21559e96b0bc0cc6680ad2278e7a4a696e0b97cc62b00421127fea6da30fa3e` | `e93ec93f8c2ce6e1db1065dc12ede3a4a503ffc5060262fca63acc9211ed97c7` |
 
-These files are pinned copies, not imports. The vendored files preserve the upstream text with repository line-ending normalization; both byte hashes are recorded so that provenance and installed bytes are independently verifiable. Runtime code must never locate the source repository, a sibling repository, or globally installed Doctor/Baseline Skills.
+These files are pinned copies, not imports. The byte hashes are recorded so that provenance and installed bytes are independently verifiable. Files whose upstream and vendored hashes differ contain reviewed standalone or host-compatibility adaptations documented in the purpose column. Runtime code must never locate the source repository, a sibling repository, or globally installed Doctor/Baseline Skills.
 
 When updating a copy:
 

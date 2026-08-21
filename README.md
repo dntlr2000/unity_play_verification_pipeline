@@ -13,12 +13,12 @@ unity_play_verification_pipeline/
 │  ├─ harness/                 # 격리 Scenario C# 실행 계약
 │  ├─ scripts/
 │  │  ├─ invoke-unity-play-verification.ps1
-│  │  ├─ lib/                  # Play 전용 XML/log/scenario 판정
+│  │  ├─ lib/                  # Play 판정과 Test Framework provenance/content identity
 │  │  └─ vendor/               # 고정된 Doctor·공용 안전 모듈
 │  └─ templates/minimal-scenario/
 ├─ scripts/                    # Play 하나만 설치하는 독립 설치기
 ├─ modules/                    # vendored dependency 출처·해시·갱신 정책
-├─ schemas/                    # result/scenario/compatibility schema 1.0.0
+├─ schemas/                    # result/scenario 1.0.0, compatibility 1.0.0/1.1.0/1.2.0
 ├─ compatibility/              # 승인 registry 운영 정책
 ├─ tests/
 │  ├─ fixtures/
@@ -50,14 +50,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-unity-
 
 ~~~powershell
 $runner = ".\skills\codex\unity-play-verification\scripts\invoke-unity-play-verification.ps1"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner -ProjectRoot "C:\path\to\UnityProject"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner -ProjectRoot "E:\Unity\MyProject"
 ~~~
 
 선택 실행은 `-TestFilter`, `-TestCategory`, `-AssemblyNames`에 세미콜론 문자열을 전달한다. 임의 Unity 인수는 받지 않는다.
 
 ~~~powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner `
-    -ProjectRoot "C:\path\to\UnityProject" `
+    -ProjectRoot "E:\Unity\MyProject" `
     -TestFilter "Game.Tests.Smoke;Game.Tests.UI"
 ~~~
 
@@ -65,11 +65,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner `
 
 ~~~powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner `
-    -ProjectRoot "C:\path\to\UnityProject" `
-    -ScenarioBundlePath "C:\external\reviewed-scenario"
+    -ProjectRoot "E:\Unity\MyProject" `
+    -ScenarioBundlePath "E:\CodexValidation\reviewed-scenario"
 ~~~
 
 `ScenarioBundlePath`는 테스트 선택 파라미터와 함께 사용할 수 없다. 정상 stdout은 JSON 문서 하나이며 같은 문서가 외부 `result.json`에 저장된다. 기본 artifact root는 `%TEMP%\upv`이고 자동 정리하지 않는다.
+
+Test Framework는 실행 전에 `manifest.json`, `packages-lock.json`, scoped registry를 함께 검사한다. 승인 항목별로 `registry + https://packages.unity.com` 또는 exact Unity Editor에 포함된 `builtin` source만 허용하며 `file:`, local, embedded, git, tarball과 가로챌 수 있는 custom scoped registry는 Unity 시작 전에 차단한다. Unity 실행 파일도 유효한 Unity Technologies 서명, exact ProductVersion과 승인 SHA-256을 모두 만족해야 한다. Unity가 종료된 뒤에는 격리본의 provenance를 다시 읽고, 정확히 하나의 실제 resolved package를 두 번 연속 안정 스냅샷으로 해시해 compatibility registry의 승인값과 비교한다.
+
+현재 승인 조합은 `2022.3.62f3 + Test Framework 1.1.33 (registry)`, `6000.0.69f1 + 1.6.0 (builtin)`, `6000.5.3f1 + 1.7.0 (builtin)`이다. Unity 6의 `builtin` 승인은 일반적인 builtin 허용이 아니라 각 signed Editor SHA-256과 resolved package tree SHA-256에 묶인 별도 계약이다.
 
 ## 판정 경계
 
@@ -80,11 +84,17 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner `
 
 `PLAY_VERIFIED`는 Player Build, 실제 장치 입력, OS 좌표 자동화, 전체 gameplay, 장기 성능, 재미·조작감·미적 품질 또는 release readiness를 의미하지 않는다.
 
+## 위협 모델
+
+Source-only는 보안 sandbox가 아니다. 원본 대신 격리 복사본을 Unity에 전달하더라도 프로젝트 코드와 scenario C#은 Unity와 같은 사용자 권한으로 실행된다. 이 파이프라인은 검토 가능한 프로젝트 코드를 대상으로 승인된 Editor/package identity와 증거 완결성을 확인하지만, fully malicious 프로젝트의 동일 사용자 파일 접근이나 artifact 위조를 격리한다고 주장하지 않는다. 실행 후 package hash는 `PLAY_VERIFIED` 승격을 보호할 뿐, 변조 코드가 실행되기 전의 보안 경계를 제공하지 않는다.
+
 ## 검증
 
 ~~~powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run-tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\installer-tests.ps1
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run-tests.ps1
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\installer-tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\acceptance\run-real-unity-acceptance.ps1
 ~~~
 

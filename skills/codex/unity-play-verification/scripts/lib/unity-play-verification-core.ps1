@@ -74,6 +74,23 @@ function Get-UpvReparsePointOnPath {
     return $null
 }
 
+# Returns the reserved isolated scenario path and rejects a pre-existing collision.
+function Get-UpvReservedScenarioOverlayAssessment {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProjectCopyPath
+    )
+
+    $root = Get-UpvNormalizedPath -Path $ProjectCopyPath
+    $reservedPath = Join-Path -Path $root -ChildPath 'Assets\__UnityPlayVerification'
+    $exists = Test-Path -LiteralPath $reservedPath
+    return [pscustomobject][ordered]@{
+        path = $reservedPath
+        collision = [bool]$exists
+        accepted = -not [bool]$exists
+        error = if ($exists) { 'The isolated base project already contains the reserved Assets/__UnityPlayVerification path.' } else { $null }
+    }
+}
+
 # Calculates a lowercase SHA-256 digest for one file.
 function Get-UpvFileSha256 {
     param(
@@ -385,6 +402,11 @@ function Get-UpvCompatibilityAssessment {
         testFrameworkVersion = $TestFrameworkVersion
         entryFound = $false
         entryStatus = $null
+        allowedSourceKind = $null
+        registryOrigin = $null
+        unityExecutableSha256 = $null
+        packageTreeSha256 = $null
+        hashCanonicalization = $null
         evidencePath = $null
         approved = $false
         error = $null
@@ -399,8 +421,8 @@ function Get-UpvCompatibilityAssessment {
             throw ([string]::Join(' ', [string[]]@($rootContract.errors)))
         }
         $result.registrySchemaVersion = [string](Get-UpvJsonProperty -InputObject $registry -Name 'schemaVersion')
-        if ($result.registrySchemaVersion -ne '1.0.0') {
-            throw "Compatibility registry schemaVersion must be 1.0.0."
+        if ($result.registrySchemaVersion -ne '1.2.0') {
+            throw "Compatibility registry schemaVersion must be 1.2.0."
         }
         $entries = $registry.PSObject.Properties['entries'].Value
         if ($entries -isnot [System.Array]) {
@@ -410,13 +432,21 @@ function Get-UpvCompatibilityAssessment {
         foreach ($entry in @($entries)) {
             $entryContract = Test-UpvExactJsonProperties `
                 -InputObject $entry `
-                -RequiredNames @('unityVersion', 'testFrameworkVersion', 'status', 'evidencePath') `
+                -RequiredNames @(
+                    'unityVersion', 'testFrameworkVersion', 'allowedSourceKind', 'registryOrigin',
+                    'unityExecutableSha256', 'packageTreeSha256', 'hashCanonicalization', 'status', 'evidencePath'
+                ) `
                 -Context 'Compatibility registry entry'
             if (-not $entryContract.accepted) {
                 throw ([string]::Join(' ', [string[]]@($entryContract.errors)))
             }
             $entryUnityVersion = Get-UpvJsonProperty -InputObject $entry -Name 'unityVersion'
             $entryFrameworkVersion = Get-UpvJsonProperty -InputObject $entry -Name 'testFrameworkVersion'
+            $entrySourceKind = Get-UpvJsonProperty -InputObject $entry -Name 'allowedSourceKind'
+            $entryRegistryOrigin = Get-UpvJsonProperty -InputObject $entry -Name 'registryOrigin'
+            $entryUnityExecutableSha256 = Get-UpvJsonProperty -InputObject $entry -Name 'unityExecutableSha256'
+            $entryTreeSha256 = Get-UpvJsonProperty -InputObject $entry -Name 'packageTreeSha256'
+            $entryCanonicalization = Get-UpvJsonProperty -InputObject $entry -Name 'hashCanonicalization'
             $entryStatus = Get-UpvJsonProperty -InputObject $entry -Name 'status'
             $entryEvidencePath = Get-UpvJsonProperty -InputObject $entry -Name 'evidencePath'
             if ($entryUnityVersion -isnot [string] -or [string]$entryUnityVersion -notmatch '^\d+\.\d+\.\d+[abfp]\d+$') {
@@ -424,6 +454,28 @@ function Get-UpvCompatibilityAssessment {
             }
             if ($entryFrameworkVersion -isnot [string] -or [string]$entryFrameworkVersion -notmatch '^\d+\.\d+\.\d+(?:[-+].+)?$') {
                 throw 'Compatibility registry entry has an invalid Test Framework version.'
+            }
+            if ($entrySourceKind -isnot [string] -or [string]$entrySourceKind -notin @('registry', 'builtin')) {
+                throw 'Compatibility registry entry has an unsupported Test Framework source kind.'
+            }
+            if ([string]$entrySourceKind -ceq 'registry') {
+                if ($entryRegistryOrigin -isnot [string] -or [string]$entryRegistryOrigin -cne 'https://packages.unity.com') {
+                    throw 'Registry compatibility entries must use the approved Unity registry origin.'
+                }
+            } elseif ($null -ne $entryRegistryOrigin) {
+                throw 'Builtin compatibility entries must record a null registry origin.'
+            }
+            if ($entryUnityExecutableSha256 -isnot [string] -or [string]$entryUnityExecutableSha256 -notmatch '^[0-9a-f]{64}$') {
+                throw 'Compatibility registry entry has an invalid Unity executable SHA-256.'
+            }
+            if ($entryTreeSha256 -isnot [string] -or [string]$entryTreeSha256 -notmatch '^[0-9a-f]{64}$') {
+                throw 'Compatibility registry entry has an invalid package tree SHA-256.'
+            }
+            if (
+                $entryCanonicalization -isnot [string] -or
+                [string]$entryCanonicalization -cne 'upv-package-tree-relative-path-length-sha256-lf-v1'
+            ) {
+                throw 'Compatibility registry entry has an unsupported package hash canonicalization.'
             }
             if ($entryStatus -isnot [string] -or [string]$entryStatus -notin @('CANDIDATE', 'APPROVED', 'RETIRED')) {
                 throw 'Compatibility registry entry has an invalid status.'
@@ -446,6 +498,12 @@ function Get-UpvCompatibilityAssessment {
         if ($matches.Count -eq 1) {
             $result.entryFound = $true
             $result.entryStatus = [string](Get-UpvJsonProperty -InputObject $matches[0] -Name 'status')
+            $result.allowedSourceKind = [string](Get-UpvJsonProperty -InputObject $matches[0] -Name 'allowedSourceKind')
+            $matchedRegistryOrigin = Get-UpvJsonProperty -InputObject $matches[0] -Name 'registryOrigin'
+            $result.registryOrigin = if ($null -eq $matchedRegistryOrigin) { $null } else { [string]$matchedRegistryOrigin }
+            $result.unityExecutableSha256 = [string](Get-UpvJsonProperty -InputObject $matches[0] -Name 'unityExecutableSha256')
+            $result.packageTreeSha256 = [string](Get-UpvJsonProperty -InputObject $matches[0] -Name 'packageTreeSha256')
+            $result.hashCanonicalization = [string](Get-UpvJsonProperty -InputObject $matches[0] -Name 'hashCanonicalization')
             $result.evidencePath = [string](Get-UpvJsonProperty -InputObject $matches[0] -Name 'evidencePath')
             $result.approved = $result.entryStatus -ceq 'APPROVED'
         }
@@ -720,6 +778,95 @@ function Get-UpvEditorLogAnalysis {
         $analysis.classification = 'SAFE'
     }
     return [pscustomobject]$analysis
+}
+
+# Maps Editor.log, NUnit, and exit evidence to the three base verification scopes without final-status promotion.
+function Get-UpvBaseVerificationScopeAssessment {
+    param(
+        [Parameter(Mandatory = $true)][object]$EditorLog,
+        [Parameter(Mandatory = $true)][object]$NUnit,
+        [Parameter()][AllowNull()][object]$ExitCode
+    )
+
+    $result = [ordered]@{
+        scriptCompilation = [ordered]@{ status = 'NOT_VERIFIED'; reason = 'Compilation evidence is incomplete.' }
+        editorPlayMode = [ordered]@{ status = 'NOT_VERIFIED'; reason = 'Editor PlayMode execution is incomplete.' }
+        playModeTests = [ordered]@{ status = 'NOT_VERIFIED'; reason = 'PlayMode test evidence is incomplete.' }
+        nunitWellFormed = $false
+        evidenceConflict = $false
+    }
+    $wellFormedClassifications = @('PASSED', 'FAILED', 'ZERO_TESTS', 'INCOMPLETE')
+    $result.nunitWellFormed = [string]$NUnit.classification -in $wellFormedClassifications
+
+    if ([string]$EditorLog.classification -eq 'FAILURE') {
+        $result.scriptCompilation.status = 'VERIFIED_FAILURE'
+        $result.scriptCompilation.reason = 'Editor.log contains concrete compilation, package, fatal, crash, or nonzero-exit evidence.'
+    } elseif ([string]$EditorLog.classification -eq 'SAFE' -and $result.nunitWellFormed) {
+        $result.scriptCompilation.status = 'VERIFIED_SUCCESS'
+        $result.scriptCompilation.reason = 'Editor.log is safe and Unity emitted a well-formed test result after project compilation.'
+    } elseif ([string]$EditorLog.classification -in @('SAFE', 'INCONCLUSIVE', 'NOT_ANALYZED')) {
+        $result.scriptCompilation.status = 'BLOCKED'
+        $result.scriptCompilation.reason = 'Compilation evidence requires both a safe Editor.log and a well-formed NUnit result.'
+    }
+
+    if ([long]$NUnit.total -gt 0 -and [string]$NUnit.classification -in @('PASSED', 'FAILED')) {
+        $result.editorPlayMode.status = 'VERIFIED_SUCCESS'
+        $result.editorPlayMode.reason = 'Unity Test Framework produced an executed Editor PlayMode result.'
+    } elseif ([string]$NUnit.classification -in @('ZERO_TESTS', 'INCOMPLETE', 'INVALID', 'NOT_ANALYZED')) {
+        $result.editorPlayMode.status = 'BLOCKED'
+        $result.editorPlayMode.reason = 'Editor PlayMode execution is missing, empty, skipped, inconclusive, or malformed.'
+    }
+
+    if ([string]$NUnit.classification -eq 'FAILED') {
+        $result.playModeTests.status = 'VERIFIED_FAILURE'
+        $result.playModeTests.reason = "$($NUnit.failed) selected PlayMode test(s) failed."
+    } elseif (
+        [string]$NUnit.classification -eq 'PASSED' -and
+        [string]$EditorLog.classification -eq 'SAFE' -and
+        $null -ne $ExitCode -and [long]$ExitCode -eq 0
+    ) {
+        $result.playModeTests.status = 'VERIFIED_SUCCESS'
+        $result.playModeTests.reason = "All $($NUnit.total) selected Editor PlayMode tests passed with complete log and exit evidence."
+    } elseif ([string]$NUnit.classification -in @('ZERO_TESTS', 'INCOMPLETE', 'INVALID', 'NOT_ANALYZED')) {
+        $result.playModeTests.status = 'BLOCKED'
+        $result.playModeTests.reason = 'PlayMode test evidence is missing, empty, skipped, inconclusive, or malformed.'
+    } elseif ([string]$NUnit.classification -eq 'PASSED') {
+        $result.playModeTests.status = 'BLOCKED'
+        $result.playModeTests.reason = 'A passed NUnit result conflicts with Editor.log or process-exit evidence.'
+    }
+    $result.evidenceConflict = (
+        [string]$NUnit.classification -eq 'PASSED' -and
+        ([string]$EditorLog.classification -ne 'SAFE' -or $null -eq $ExitCode -or [long]$ExitCode -ne 0)
+    )
+    return [pscustomobject]$result
+}
+
+# Applies the public final-status precedence to integrity, blockers, failures, compatibility, and required scopes.
+function Get-UpvFinalStatusAssessment {
+    param(
+        [Parameter(Mandatory = $true)][string]$OriginalIntegrityStatus,
+        [Parameter(Mandatory = $true)][string]$GitIntegrityStatus,
+        [Parameter(Mandatory = $true)][int]$BlockerCount,
+        [Parameter(Mandatory = $true)][int]$FailureCount,
+        [Parameter(Mandatory = $true)][string]$CompatibilityStatus,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$RequiredScopeStatuses
+    )
+
+    if ($OriginalIntegrityStatus -ceq 'CHANGED' -or $GitIntegrityStatus -ceq 'CHANGED') {
+        return 'ORIGINAL_PROJECT_CHANGED'
+    }
+    if ($BlockerCount -gt 0 -or $CompatibilityStatus -cne 'VERIFIED_SUCCESS') {
+        return 'VERIFICATION_BLOCKED'
+    }
+    if ($FailureCount -gt 0) {
+        return 'PLAY_FAILED'
+    }
+    foreach ($scopeStatus in @($RequiredScopeStatuses)) {
+        if ($scopeStatus -cne 'VERIFIED_SUCCESS') {
+            return 'VERIFICATION_BLOCKED'
+        }
+    }
+    return 'PLAY_VERIFIED'
 }
 
 # Validates one array of unique non-empty manifest identifiers.

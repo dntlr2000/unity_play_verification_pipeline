@@ -1,21 +1,36 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.2.0",
   "entries": [
     {
       "unityVersion": "2022.3.62f3",
       "testFrameworkVersion": "1.1.33",
+      "allowedSourceKind": "registry",
+      "registryOrigin": "https://packages.unity.com",
+      "unityExecutableSha256": "02e80b2c1d7f983375c97b612655be9f8ed852121e3a4eedf1570701c48ea5cd",
+      "packageTreeSha256": "18b9576da338b999a61157c9235f4ef3a91360cc877dbf49281a13f37e7da36b",
+      "hashCanonicalization": "upv-package-tree-relative-path-length-sha256-lf-v1",
       "status": "APPROVED",
       "evidencePath": "docs/validation/unity-play-verification-real-unity-acceptance.md"
     },
     {
       "unityVersion": "6000.0.69f1",
       "testFrameworkVersion": "1.6.0",
+      "allowedSourceKind": "builtin",
+      "registryOrigin": null,
+      "unityExecutableSha256": "3927c20e4c76f15951989fd4866546b03d3ebfcc72bb5d708cd6397fad50451d",
+      "packageTreeSha256": "af8b4770ae87d4ebb657367c32add4ba20d5e204f07ccdfa1c1bbc4ef045f18f",
+      "hashCanonicalization": "upv-package-tree-relative-path-length-sha256-lf-v1",
       "status": "APPROVED",
       "evidencePath": "docs/validation/unity-play-verification-real-unity-acceptance.md"
     },
     {
       "unityVersion": "6000.5.3f1",
       "testFrameworkVersion": "1.7.0",
+      "allowedSourceKind": "builtin",
+      "registryOrigin": null,
+      "unityExecutableSha256": "5e54f3a9953179419ddf8af860c3ccdcbb6ada45276fa9df06fdaaaa1124a118",
+      "packageTreeSha256": "e7b3c700661018e5c368305fcc151ae015fc6ebb8123e2dbe0bd07fb4ca69dbf",
+      "hashCanonicalization": "upv-package-tree-relative-path-length-sha256-lf-v1",
       "status": "APPROVED",
       "evidencePath": "docs/validation/unity-play-verification-real-unity-acceptance.md"
     }
