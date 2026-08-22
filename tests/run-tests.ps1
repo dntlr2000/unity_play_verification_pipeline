@@ -304,8 +304,25 @@ try {
     )) {
         Assert-True -Condition (Test-Path -LiteralPath $requiredPath) -Message "Required Play verification path exists: $requiredPath"
     }
-    Assert-Equal -Expected '0.2.0' -Actual ((Get-Content -Raw -LiteralPath (Join-Path $script:RepositoryRoot 'VERSION')).Trim()) -Message 'Repository VERSION'
-    Assert-Equal -Expected '0.2.0' -Actual ((Get-Content -Raw -LiteralPath (Join-Path $script:SkillRoot 'VERSION')).Trim()) -Message 'Play Skill VERSION'
+    # Confirms every public release surface resolves to the repository version.
+    $repositoryVersion = (Get-Content -Raw -LiteralPath (Join-Path $script:RepositoryRoot 'VERSION')).Trim()
+    $skillVersion = (Get-Content -Raw -LiteralPath (Join-Path $script:SkillRoot 'VERSION')).Trim()
+    $runnerVersionContent = Get-Content -Raw -LiteralPath $script:RunnerPath
+    $componentVersionMatch = [regex]::Match($runnerVersionContent, '\$script:ComponentVersion\s*=\s*''([^'']+)''')
+    $verifierVersionMatch = [regex]::Match($runnerVersionContent, '\$script:VerifierVersion\s*=\s*''([^'']+)''')
+    Assert-True -Condition ($repositoryVersion -match '^\d+\.\d+\.\d+$') -Message 'Repository VERSION is semantic'
+    Assert-True -Condition $componentVersionMatch.Success -Message 'Runner declares ComponentVersion'
+    Assert-True -Condition $verifierVersionMatch.Success -Message 'Runner declares VerifierVersion'
+    Assert-Equal -Expected $repositoryVersion -Actual $skillVersion -Message 'Repository and Play Skill versions are consistent'
+    Assert-Equal -Expected $repositoryVersion -Actual $componentVersionMatch.Groups[1].Value -Message 'Repository and runner component versions are consistent'
+    Assert-Equal -Expected $repositoryVersion -Actual $verifierVersionMatch.Groups[1].Value -Message 'Repository and runner verifier versions are consistent'
+    $releaseVersionToken = '`' + $repositoryVersion + '`'
+    $readmeVersionContent = Get-Content -Raw -LiteralPath (Join-Path $script:RepositoryRoot 'README.md')
+    $skillGuideVersionContent = Get-Content -Raw -LiteralPath (Join-Path $script:RepositoryRoot 'docs\skills\unity-play-verification.md')
+    $changelogVersionContent = Get-Content -Raw -LiteralPath (Join-Path $script:RepositoryRoot 'CHANGELOG.md')
+    Assert-True -Condition $readmeVersionContent.Contains($releaseVersionToken) -Message 'README records the repository version'
+    Assert-True -Condition $skillGuideVersionContent.StartsWith("# Unity Play Verification $repositoryVersion") -Message 'Skill guide heading records the repository version'
+    Assert-True -Condition ($changelogVersionContent -match [regex]::Escape("## Component $repositoryVersion")) -Message 'Changelog records the repository version'
 
     $provenanceContent = Get-Content -Raw -LiteralPath $script:ProvenancePath
     foreach ($vendoredPath in $script:VendoredRuntimePaths) {
@@ -316,6 +333,9 @@ try {
 
     $acceptancePath = Join-Path $script:RepositoryRoot 'docs\validation\unity-play-verification-real-unity-acceptance.md'
     $acceptanceContent = Get-Content -Raw -LiteralPath $acceptancePath
+    $acceptanceVersionToken = '**`' + $repositoryVersion + '`**'
+    Assert-True -Condition $acceptanceContent.Contains("Standalone repository target: $acceptanceVersionToken") -Message 'Acceptance record matches the repository version'
+    Assert-True -Condition $acceptanceContent.Contains("Play Skill: $acceptanceVersionToken") -Message 'Acceptance record matches the Play Skill version'
     Assert-True -Condition ($acceptanceContent -match 'SELECTED EDITOR PLAYMODE TESTS AND SOURCE-ONLY SCENARIOS ONLY') -Message 'Acceptance scope is explicitly limited'
     Assert-True -Condition ($acceptanceContent -match '18-case matrix') -Message 'Acceptance document records the full requested real-Unity matrix outcome'
     Assert-True -Condition ($acceptanceContent -match '21 results total') -Message 'Acceptance document records three supplemental compilation-failure cases'

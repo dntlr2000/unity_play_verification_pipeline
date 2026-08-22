@@ -5,7 +5,7 @@ description: "Run approved Unity Editor PlayMode tests or a validated source-onl
 
 # Unity Play Verification
 
-Use the bundled PowerShell entrypoint as the sole source of dynamic Play verification truth. The verifier creates an external project copy, starts only an exact signed and approved Unity editor, requires official-registry Test Framework provenance plus the approved resolved package tree, parses NUnit XML and Editor.log together, and proves the original project stayed unchanged.
+Use the bundled PowerShell entrypoint as the sole source of dynamic Play verification truth. The verifier creates an external project copy, starts only an exact signed and approved Unity editor, requires the compatibility entry's approved source-specific Test Framework provenance plus the approved resolved package tree, parses NUnit XML and Editor.log together, and proves the original project stayed unchanged.
 
 ## Invocation policy
 

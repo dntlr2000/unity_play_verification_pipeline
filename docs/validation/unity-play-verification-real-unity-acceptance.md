@@ -2,11 +2,11 @@
 
 Acceptance status: **APPROVED — SELECTED EDITOR PLAYMODE TESTS AND SOURCE-ONLY SCENARIOS ONLY**
 
-Acceptance date: **2026-08-21**
+Acceptance date: **2026-08-23**
 
-Standalone repository target: **`0.2.0`**
+Standalone repository target: **`0.3.0`**
 
-Play Skill: **`0.2.0`**
+Play Skill: **`0.3.0`**
 
 Result schema: **`1.0.0`**
 
@@ -60,13 +60,13 @@ The production entrypoint reran the requested 18-case matrix: six cases for each
 
 Each pass case used a multi-frame `[UnityTest]`. Deliberate failures produced complete NUnit XML. Skip, Inconclusive, and zero-selection cases were blocked without promotion. Each successful scenario produced the exact receipt and one non-empty 12,152-byte PNG with SHA-256 `5caaf573ffc294827df39b5de5bf9f433ac2d1f443c29ff696d19fd12d36c47b`; pixels were not judged. Each broken overlay produced `scriptCompilation: VERIFIED_FAILURE`, retained matching package identity, proved zero remaining Job Object processes, and ended `PLAY_FAILED`.
 
-The sealed rerun reported `caseCount: 21`, `approvedIdentityCaseCount: 21`, `sourcePolicyBlockedCaseCount: 0`, and `acceptanceStatus: APPROVED`. Its public-safe summary SHA-256 is `1bb38b202cdb8a71bd543a5fc81a374b874dd4e6792f340f7df421842128d157`. The separate three-Editor package-discovery summary has SHA-256 `5f395b3ab85876ecdab92ac76e6c3ac1365ca58628b13f9534c3f23034756bd1` and status `COMPLETE`. Both external artifact trees remain preserved on the acceptance host and are not committed because they contain local paths and generated Unity data.
+The sealed rerun reported `caseCount: 21`, `approvedIdentityCaseCount: 21`, `sourcePolicyBlockedCaseCount: 0`, and `acceptanceStatus: APPROVED`. Its public-safe summary SHA-256 is `549cf9d572e4967f54e89311cda41cbec3c1a109ce9794b00993df1eef5eb02e`. The separate three-Editor package-discovery summary has SHA-256 `5f395b3ab85876ecdab92ac76e6c3ac1365ca58628b13f9534c3f23034756bd1` and status `COMPLETE`. Both external artifact trees remain preserved on the acceptance host and are not committed because they contain local paths and generated Unity data.
 
 ## Production hashes
 
 | File | SHA-256 |
 | --- | --- |
-| `scripts/invoke-unity-play-verification.ps1` | `ad5d1d71e93c177b54c991c5ab5a58671081149c4f720d053a8701d2f8ea5dec` |
+| `scripts/invoke-unity-play-verification.ps1` | `abeeee1f985245527333aaa58808b7114bc63797d7b9b80607a17b16c9efb6a6` |
 | `scripts/lib/unity-play-verification-core.ps1` | `1c40fa02c5a2d44bc2c7af6f162949bc57dbc41c8bf7fe988bee36026e7e400c` |
 | `scripts/lib/unity-test-framework-identity.ps1` | `ecd29468afe9986b3e4ec3c839ce1174bf2b1dbca2eab2f01f13280ef2eb852b` |
 | `harness/PlayVerificationHarness.cs` | `0bc54dcda85452c3bfa308502bff5c193bde9d829a7d56fe7169e7bdf0f25e2a` |
@@ -77,7 +77,7 @@ The sealed rerun reported `caseCount: 21`, `approvedIdentityCaseCount: 21`, `sou
 | `unity-play-compatibility-1.2.0.schema.json` | `70e70317a6b23267bd09033dd27cb9fffd3891700fec9ea81dbfa7c1731b0931` |
 | `config/unity-play-compatibility.json` | `17e054cd31a9ce641ec605a8299c1ea22ad92031e58dd2fa2c3c706a12a5546d` |
 
-These hashes identify the standalone production candidate. The 2026-08-21 rerun described above revalidated this exact set; documentation, repository metadata, tests, and the test-only schema validator may have separate hashes.
+These hashes identify the standalone production candidate. The 2026-08-23 rerun described above revalidated this exact set; documentation, repository metadata, tests, and the test-only schema validator may have separate hashes.
 
 ## Safety evidence
 

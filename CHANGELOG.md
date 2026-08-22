@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## Component 0.3.0 — 2026-08-23
 
+- Synchronized the standalone repository, Skill, component, and verifier versions at `0.3.0`, with an automated cross-file consistency gate.
+- Added `git diff --check` to CI and resealed the PowerShell 5.1, PowerShell 7.x, installer, and signed real-Unity acceptance gates.
 - Test Framework trust now requires exact source-specific provenance before Unity and matching post-run provenance plus deterministic resolved-package identity before any `PLAY_VERIFIED` promotion.
 - Preserved immutable compatibility schemas 1.0.0 and 1.1.0, then added schema 1.2.0 with pinned Unity.exe SHA-256 and separate official-registry versus Editor-builtin contracts.
 - Reapproved `6000.0.69f1 + 1.6.0` and `6000.5.3f1 + 1.7.0` as exact signed-Editor/builtin package identities without treating builtin content as registry content.
@@ -12,7 +14,6 @@
 - 공개 runner 파라미터, result schema 1.0.0, 최종 상태, verification scope, v0.1 프로젝트 테스트 모드와 v0.2 ScenarioBundle 모드를 유지했다.
 - Doctor scanner 0.2.1과 필요한 Baseline 0.2.0 안전 모듈을 해시가 고정된 내부 사본으로 포함했다.
 - Play Skill 하나만 안전하게 설치하는 독립 설치기와 standalone fixture/acceptance suite를 추가했다.
-- 이 항목은 마이그레이션 작업 기록이며 commit, tag 또는 release를 뜻하지 않는다.
 
 ## Component 0.2.0
 

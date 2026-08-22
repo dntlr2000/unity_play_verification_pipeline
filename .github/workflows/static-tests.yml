@@ -37,6 +37,7 @@ jobs:
       - name: Verify checkout remained unchanged
         shell: pwsh
         run: |
+          git diff --check
           git diff --exit-code
           $status = @(git status --short --untracked-files=all)
           if ($status.Count -ne 0) {

@@ -1,4 +1,4 @@
-# Unity Play Verification 0.2.0
+# Unity Play Verification 0.3.0
 
 `$unity-play-verification`은 원본 Unity 프로젝트를 Unity에 열지 않고, 외부 격리 복사본에서 선택한 Editor PlayMode 테스트 또는 검토 가능한 source-only 시나리오를 실행하는 명시 호출 전용 Skill이다.
 

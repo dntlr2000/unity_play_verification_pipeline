@@ -2,7 +2,7 @@
 
 Unity Play Verification Pipeline은 Unity 원본 프로젝트를 수정하지 않고 외부 격리 복사본에서 Editor PlayMode 테스트와 검토 가능한 source-only 시나리오를 실행하는 독립 파이프라인이다. 이 저장소는 `unity_agent_pipeline`이나 전역 Doctor/Baseline Skill이 없어도 설치·실행·테스트할 수 있다.
 
-현재 저장소 버전과 `$unity-play-verification` Skill 버전은 모두 `0.2.0`이다. Skill은 명시 호출 전용이며 `allow_implicit_invocation: false`를 유지한다.
+현재 저장소 버전과 `$unity-play-verification` Skill 버전은 모두 `0.3.0`이다. Skill은 명시 호출 전용이며 `allow_implicit_invocation: false`를 유지한다.
 
 ## 책임과 구조
 
